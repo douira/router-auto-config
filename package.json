@@ -1,7 +1,7 @@
 {
   "name": "router-auto-config",
   "version": "1.0.0",
-  "description": "can configure routers by sending packets to their web interfaces",
+  "description": "can configure routers by sending requests to their web interfaces",
   "main": "main.js",
   "dependencies": {
     "colors": "^1.1.2"
