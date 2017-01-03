@@ -1,0 +1,17 @@
+{
+  "name": "router-auto-config",
+  "version": "1.0.0",
+  "description": "can configure routers by sending packets to their web interfaces",
+  "main": "main.js",
+  "dependencies": {
+    "colors": "^1.1.2"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "douira",
+  "engines": {
+    "node": ">=6.9.1"
+  },
+}
