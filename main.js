@@ -20,13 +20,13 @@ function createLogger(prefix) {
   }, {});
 };
 
-function authRequest(host, path, userName, password, callback) {
+function authRequest(loginData, host, path, callback) {
   //make http request
   http.request(
     {
       //pass given params
       hostname: host,
-      auth: userName + ":" + password, //auth with basic https auth
+      auth: loginData.userName + ":" + loginData.password, //auth with basic https auth
       path: path,
       headers: {
         Referer: "http://" + host //makes the router happy, it just wants this, otherwise we get a 401
@@ -78,14 +78,13 @@ function getResponseHandler(checkResponse) {
   }
 }
 
-//sets the password
+//sets the wifi password
 function setWifiPassword(newPassword) {
   //make a request to change the wifi password
   authRequest(
+    loginData, //use login data for current main router
     "192.168.2.160", //ip of router to send this to, is a TL-WR710N
     "/userRpm/WlanSecurityRpm.htm?secType=3&pskSecOpt=3&pskCipher=1&pskSecret=" + newPassword + "&interval=0&wpaSecOpt=3&wpaCipher=1&radiusIp=&radiusPort=1812&radiusSecret=&intervalWpa=0&wepSecOpt=3&keytype=1&keynum=1&key1=&length1=0&key2=&length2=0&key3=&length3=0&key4=&length4=0&Save=Save",
-    "admin", //web interface login name
-    "HXBn3506yvxA", //login password
     //handles response data and looks for password in reponse to verify success
     getResponseHandler((reponseData) => {
       return reponseData.indexOf(newPassword) >= 0;
@@ -93,10 +92,14 @@ function setWifiPassword(newPassword) {
   );
 }
 
+var loginData = {
+  userName: "admin", //web interface login name
+  password: "HXBn3506yvxA" //login password
+};
+
 setWifiPassword("A3fgnX5688bZ4y");
 
 /* sniffed original packet from real browser usage, old: A3fgnX5688bZ4x, new: A3fgnX5688bZ4y
-
 GET /userRpm/WlanSecurityRpm.htm?secType=3&pskSecOpt=3&pskCipher=1&pskSecret=A3fgnX5688bZ4y&interval=0&wpaSecOpt=3&wpaCipher=1&radiusIp=&radiusPort=1812&radiusSecret=&intervalWpa=0&wepSecOpt=3&keytype=1&keynum=1&key1=&length1=0&key2=&length2=0&key3=&length3=0&key4=&length4=0&Save=Save HTTP/1.1
 Host: 192.168.2.160
 Connection: keep-alive
@@ -106,5 +109,4 @@ Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,* /*;q=
 Referer: http://192.168.2.160/userRpm/WlanSecurityRpm.htm?secType=3&pskSecOpt=3&pskCipher=1&pskSecret=A3fgnX5688bZ4x&interval=0&wpaSecOpt=3&wpaCipher=1&radiusIp=&radiusPort=1812&radiusSecret=&intervalWpa=0&wepSecOpt=3&keytype=1&keynum=1&key1=&length1=0&key2=&length2=0&key3=&length3=0&key4=&length4=0&Save=Save
 Accept-Encoding: gzip, deflate, sdch
 Accept-Language: de-DE,de;q=0.8,en-US;q=0.6,en;q=0.4
-
 */
