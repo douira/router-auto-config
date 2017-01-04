@@ -1,12 +1,73 @@
-var http = require("http");
-var colors = require("colors/safe");
+const http = require("http");
+const colors = require("colors/safe");
 
+//settings
+const confidenceThreshold = 0.9; //minimum confidence to accept best determined device config
+const probeTimeout = 1000; //device determining request timeout
+
+//what routers we know and how to deal with them
+const routerConfigs = [
+  {
+    name: "TP-LINK WR710N", //type display name
+    fingerprint: { //fields in reponse headers to check for equality, gotten from direct test request
+      "server":"Router Webserver",
+      "connection":"close",
+      "www-authenticate":"Basic realm=\"TP-LINK 150Mbps Wireless N Mini Pocket Router WR710N\"",
+      "content-type":"text/html"
+    },
+    data: { //additional data needed to perform actions
+      userName: "admin",
+      password: "HXBn3506yvxA"
+    },
+    actions: { //actions that can be acalled on this router
+      setWifiPassword: {
+        //more data, passed as data.actionData to action performing functions
+        actionData: {
+          pathParts: [
+            "/userRpm/WlanSecurityRpm.htm?secType=3&pskSecOpt=3&pskCipher=1&pskSecret=",   "&interval=0&wpaSecOpt=3&wpaCipher=1&radiusIp=&radiusPort=1812&radiusSecret=&intervalWpa=0&wepSecOpt=3&keytype=1&keynum=1&key1=&length1=0&key2=&length2=0&key3=&length3=0&key4=&length4=0&Save=Save"
+          ]
+        },
+        //function returns http request options object
+        getOptions: (data, host, actionParams) => {
+          //object has host, the correct referrer, auth and the action GET data
+          return {
+            hostname: host,
+            auth: loginData.userName + ":" + loginData.password, //auth with basic https auth
+            path: data.actionData.pathParts[0] + actionParams.setPassword + data.actionData.pathParts[1],
+            headers: {
+              Referer: "http://" + host //makes the router happy, it just wants this, otherwise we get a 401
+            }
+          };
+        },
+        //if it had been necessary, we could give a function here of which the reponse is sent for POST requests
+        //getPostData: (data) => { ... },
+        //function verifies action success
+        verify: (data, reponseData) => {
+          return reponseData.indexOf(newPassword) >= 0;
+        }
+      }
+    }
+  },
+  {
+    name: "EasyBoy 904 xDSL",
+    fingerprint: {
+      "server":"Apache",
+      "pragma":"no-cache",
+      "cache-control":"max-age=0, must-revalidate",
+      "connection":"close",
+      "content-type":"text/html",
+      "content-length":"29923"
+    }
+  }
+];
+
+//returns object with logger functions
 function createLogger(prefix) {
-  //create object with logger functions
   return [
     //name of logger function with color name
     ["info", "cyan"],
     ["success", "green"],
+    ["warn", "yellow"],
     ["error", "red"]
   ].reduce((obj, logType) => {
     //add colorized logger
@@ -18,95 +79,112 @@ function createLogger(prefix) {
     //return modified object
     return obj;
   }, {});
-};
-
-function authRequest(loginData, host, path, callback) {
-  //make http request
-  http.request(
-    {
-      //pass given params
-      hostname: host,
-      auth: loginData.userName + ":" + loginData.password, //auth with basic https auth
-      path: path,
-      headers: {
-        Referer: "http://" + host //makes the router happy, it just wants this, otherwise we get a 401
-      }
-    },
-    //use callback with bound logging function
-    callback.bind(null, createLogger("[" + host + "]"))
-  )
-  //handle errors by printing them
-  .on("error", (e) => {
-    console.log(colors.red("problem with request: " + e.message));
-  })
-  //close when done
-  .end();
 }
-//given to request to handle what's sent back
-function getResponseHandler(checkResponse) {
-  return (logger, response) => {
-    //gets status code from response
-    const statusCode = response.statusCode;
 
-    //check for ok code
-    if (statusCode === 200) {
-      //print ok with code
-      logger.info("Auth login ok with status code " + statusCode);
-      //log("HEADERS: " + JSON.stringify(response.headers));
+//determines number of properties an object has
+function getObjectPropAmount(obj) {
+  return Object.keys(obj).length;
+}
 
-      //collect response data
-      let reponseData = [];
+//uses fingerprints to determine the best device match for the reponse headers
+function matchHeaders(headers) {
+  return routerConfigs
+    //match with all configs and calculate similarity to fingerprints
+    .map((config) => {
+      //determine match confidence
+      let confidence = 0;
 
-      //add length to counter on received data
-      response
-      .on("data", (chunk) => {
-        reponseData.push(chunk);
-        //log(chunk);
-      })
-      //handle counted length on end of transmission
-      .on("end", () => {
-        if (checkResponse(reponseData.join())) {
-          logger.success("Succes of request action verified.");
-        } else {
-          logger.error("Failed to verify succes of request action!");
+      //for all fingerprint fieds
+      for (let checkName in config.fingerprint) {
+        //check presence in given headers
+        if (headers.hasOwnProperty(checkName)) {
+          //similarity increases confidence
+          confidence ++;
+
+          //check match with given headers
+          if (headers.hasOwnProperty(checkName)) {
+            confidence ++;
+          }
         }
-      });
-    } else {
-      //error when code isn't 200
-      logger.error("Received status code " + statusCode + " on auth.");
-    }
-  }
-}
+      }
 
-//sets the wifi password
-function setWifiPassword(newPassword) {
-  //make a request to change the wifi password
-  authRequest(
-    loginData, //use login data for current main router
-    "192.168.2.160", //ip of router to send this to, is a TL-WR710N
-    "/userRpm/WlanSecurityRpm.htm?secType=3&pskSecOpt=3&pskCipher=1&pskSecret=" + newPassword + "&interval=0&wpaSecOpt=3&wpaCipher=1&radiusIp=&radiusPort=1812&radiusSecret=&intervalWpa=0&wepSecOpt=3&keytype=1&keynum=1&key1=&length1=0&key2=&length2=0&key3=&length3=0&key4=&length4=0&Save=Save",
-    //handles response data and looks for password in reponse to verify success
-    getResponseHandler((reponseData) => {
-      return reponseData.indexOf(newPassword) >= 0;
+      //check header amount match
+      if (getObjectPropAmount(config.fingerprint) === getObjectPropAmount(headers)) {
+        confidence ++;
+      }
+
+      //return confidence as percentage by dividing through possible max amount of points
+      return confidence / (getObjectPropAmount(config.fingerprint) * 2 + 1);
     })
-  );
+    //find config for highest confidence value
+    .reduce((best, confidence, configIndex) => {
+      //confidence is largest than current best
+      if (best.confidence < confidence) {
+        //change best to new confidence and config
+        best.confidence = confidence;
+        best.config = routerConfigs[configIndex];
+      }
+
+      //return modifed object
+      return best;
+    }, {
+      confidence: 0,
+      config: null
+    });
 }
 
-var loginData = {
-  userName: "admin", //web interface login name
-  password: "HXBn3506yvxA" //login password
-};
+//return decimal number as percent int
+function asPercent(fraction) {
+  return Math.ceil(fraction * 100)
+}
 
-setWifiPassword("A3fgnX5688bZ4y");
+//finds the correct config for a given host address
+function getHostConfig(host, callback) {
+  const logger = createLogger("[" + host + "]");
 
-/* sniffed original packet from real browser usage, old: A3fgnX5688bZ4x, new: A3fgnX5688bZ4y
-GET /userRpm/WlanSecurityRpm.htm?secType=3&pskSecOpt=3&pskCipher=1&pskSecret=A3fgnX5688bZ4y&interval=0&wpaSecOpt=3&wpaCipher=1&radiusIp=&radiusPort=1812&radiusSecret=&intervalWpa=0&wepSecOpt=3&keytype=1&keynum=1&key1=&length1=0&key2=&length2=0&key3=&length3=0&key4=&length4=0&Save=Save HTTP/1.1
-Host: 192.168.2.160
-Connection: keep-alive
-Upgrade-Insecure-Requests: 1
-User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/55.0.2883.95 Safari/537.36
-Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,* /*;q=0.8
-Referer: http://192.168.2.160/userRpm/WlanSecurityRpm.htm?secType=3&pskSecOpt=3&pskCipher=1&pskSecret=A3fgnX5688bZ4x&interval=0&wpaSecOpt=3&wpaCipher=1&radiusIp=&radiusPort=1812&radiusSecret=&intervalWpa=0&wepSecOpt=3&keytype=1&keynum=1&key1=&length1=0&key2=&length2=0&key3=&length3=0&key4=&length4=0&Save=Save
-Accept-Encoding: gzip, deflate, sdch
-Accept-Language: de-DE,de;q=0.8,en-US;q=0.6,en;q=0.4
-*/
+  //send request to get reponse headers
+  logger.info("Determining device type...");
+  http
+    //send GET to host
+    .request(
+      //bare bones
+      { hostname: host },
+      (response) => {
+        //logger.info("HEADERS: " + JSON.stringify(response.headers));
+
+        //use headers in fingerprints to determine device type
+        let result = matchHeaders(response.headers);
+
+        //atually found a device type
+        if (result.config) {
+          //minimum confidence
+          if (result.confidence >= confidenceThreshold) {
+            //warn if not 100%
+            logger[result.confidence === 1 ? "success" : "warn"]("Device is '" + result.config.name + "' with " + asPercent(result.confidence) + "% confidence.");
+
+            //call callback with determined device config
+            callback(result.config);
+          } else {
+            //less than threshold
+            logger.error("Device type could not be determined with " + asPercent(result.confidence) + " < " + asPercent(confidenceThreshold) + "% sufficient confidence.");
+          }
+        } else {
+          //found no device
+          logger.error("Device type could not be determined. ")
+        }
+      }
+    )
+    //set timeout time
+    .setTimeout(probeTimeout, () => {
+      //took too long for device to respond
+      logg.error("Request timeout after " + probeTimeout + "ms: Device took too long to respond.");
+    })
+    //handle errors by printing them
+    .on("error", (e) => {
+      logger.error("Problem with request: " + e.message);
+    })
+    //close, we don't want any data (yet)
+    .end();
+}
+
+getHostConfig("192.168.2.16", (config) => {});
