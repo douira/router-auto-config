@@ -49,7 +49,7 @@ const routerConfigs = [
     }
   },
   {
-    name: "EasyBoy 904 xDSL",
+    name: "EasyBox 904 xDSL",
     fingerprint: {
       "server":"Apache",
       "pragma":"no-cache",
@@ -201,4 +201,4 @@ function getHostConfig(host, callback) {
   request.end();
 }
 
-getHostConfig("192.168.2.11", (config) => {});
+getHostConfig("192.168.2.160", (config) => {});
