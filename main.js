@@ -142,13 +142,19 @@ function asPercent(fraction) {
 function getHostConfig(host, callback) {
   const logger = createLogger("[" + host + "]");
 
+  //keeps track of if an timeout has occured
+  let timedOut = false;
+
   //send request to get reponse headers
   logger.info("Determining device type...");
-  http
+  let request = http
     //send GET to host
     .request(
       //bare bones
-      { hostname: host },
+      {
+        hostname: host,
+        timeout: probeTimeout
+      },
       (response) => {
         //logger.info("HEADERS: " + JSON.stringify(response.headers));
 
@@ -162,7 +168,7 @@ function getHostConfig(host, callback) {
             //warn if not 100%
             logger[result.confidence === 1 ? "success" : "warn"]("Device is '" + result.config.name + "' with " + asPercent(result.confidence) + "% confidence.");
 
-            //call callback with determined device config
+            //callback with determined device config
             callback(result.config);
           } else {
             //less than threshold
@@ -170,21 +176,29 @@ function getHostConfig(host, callback) {
           }
         } else {
           //found no device
-          logger.error("Device type could not be determined. ")
+          logger.error("Device type could not be determined.")
         }
       }
     )
-    //set timeout time
-    .setTimeout(probeTimeout, () => {
+    .once("timeout", () => {
       //took too long for device to respond
-      logg.error("Request timeout after " + probeTimeout + "ms: Device took too long to respond.");
+      logger.error("Request timeout after " + probeTimeout + "ms: Device took too long to respond.");
+
+      //actually stop the request
+      request.abort();
+
+      //set flag to prevent another error message
+      timedOut = true;
     })
     //handle errors by printing them
     .on("error", (e) => {
-      logger.error("Problem with request: " + e.message);
-    })
-    //close, we don't want any data (yet)
-    .end();
+      if (! timedOut) {
+        logger.error("Problem with request: " + e.message);
+      }
+    });
+
+  //done sending request
+  request.end();
 }
 
-getHostConfig("192.168.2.16", (config) => {});
+getHostConfig("192.168.2.11", (config) => {});
