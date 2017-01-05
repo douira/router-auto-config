@@ -4,7 +4,8 @@
   "description": "can configure routers by sending requests to their web interfaces",
   "main": "main.js",
   "dependencies": {
-    "colors": "^1.1.2"
+    "colors": "^1.1.2",
+    "object.values": "^1.0.4"
   },
   "devDependencies": {},
   "scripts": {
@@ -14,8 +15,8 @@
   "engines": {
     "node": ">=6.9.1"
   },
-  "repository" : {
-    "type" : "git",
-    "url" : "https://github.com/douira/router-auto-config"
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/douira/router-auto-config"
   }
 }
