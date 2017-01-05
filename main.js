@@ -156,7 +156,7 @@ function attachRequestErrorHandlers(request, logger) {
     //timeout handler
     .once("timeout", () => {
       //took too long for device to respond
-      logger.error("Request timeout after " + probeTimeout + "ms: Device took too long to respond.");
+      logger.error("Request timeout after " + request.timeout + "ms: Device took too long to respond.");
 
       //actually stop the request
       request.abort();
@@ -252,90 +252,95 @@ function performAction(host, config, actionName, logger, actionParams) {
     actionParams = {};
   }
 
-  //check that this device has this action
-  if (config.actions.hasOwnProperty(actionName)) {
-    //preprocess action to perform
-    const currentAction = preprocessAction(config, config.actions[actionName], actionParams);
+  //check if device has nay actions
+  if (config.hasOwnProperty("actions")) {
+    //check that this device has this action
+    if (config.actions.hasOwnProperty(actionName)) {
+      //preprocess action to perform
+      const currentAction = preprocessAction(config, config.actions[actionName], actionParams);
 
-    //get request options from action
-    let requestOptions = currentAction.getOptions(host);
+      //get request options from action
+      let requestOptions = currentAction.getOptions(host);
 
-    //add host and timeout option property
-    requestOptions.hostname = host;
-    requestOptions.timeout = actionTimeout;
+      //add host and timeout option property
+      requestOptions.hostname = host;
+      requestOptions.timeout = actionTimeout;
 
-    //send request to perform action
-    const request = http
-      .request(
-        //processed options
-        requestOptions,
-        //handles reponse to verify success
-        (response) => {
-          //flag set to true if response is ok
-          let validated = false;
+      //send request to perform action
+      const request = http
+        .request(
+          //processed options
+          requestOptions,
+          //handles reponse to verify success
+          (response) => {
+            //flag set to true if response is ok
+            let validated = false;
 
-          //use function if given to validate reponse
-          if (currentAction.hasOwnProperty("validateResponse")) {
-            //validate with function
-            validated = currentAction.validateResponse(response);
-            if (validated) {
-              logger.success("Reponse passed action specific validation.")
+            //use function if given to validate reponse
+            if (currentAction.hasOwnProperty("validateResponse")) {
+              //validate with function
+              validated = currentAction.validateResponse(response);
+              if (validated) {
+                logger.success("Reponse passed action specific validation.")
+              } else {
+                logger.error("Response didn't pass action specific validation.");
+              }
             } else {
-              logger.error("Response didn't pass action specific validation.");
+              const statusCode = response.statusCode;
+
+              //ok with status code 200
+              validated = statusCode === 200;
+              if (validated) {
+                logger.warn("Validated reponse with status code 200.")
+              } else {
+                logger.error("Response error with status code " + statusCode + " returned.");
+              }
             }
-          } else {
-            const statusCode = response.statusCode;
 
-            //ok with status code 200
-            validated = statusCode === 200;
+            //proceed with response data validation
             if (validated) {
-              logger.warn("Validated reponse with status code 200.")
-            } else {
-              logger.error("Response error with status code " + statusCode + " returned.");
+              //logger.info("HEADERS: " + JSON.stringify(response.headers));
+              //check if we can validate reponse data
+              if (currentAction.hasOwnProperty("validateResponseData")) {
+                //collect response data
+                let reponseData = [];
+
+                //add length to counter on received data
+                response
+                  .on("data", (chunk) => {
+                    reponseData.push(chunk);
+                  })
+                  //validate data on completion of data sending
+                  .on("end", () => {
+                    if (currentAction.validateResponseData(reponseData.join(), response)) {
+                      logger.success("Response data passed action specific validation.");
+                    } else {
+                      logger.error("Response data didn't pass action specific validation.");
+                    }
+                  });
+              } else {
+                logger.warn("Cannot validate response data.")
+              }
             }
           }
+        );
 
-          //proceed with response data validation
-          if (validated) {
-            //logger.info("HEADERS: " + JSON.stringify(response.headers));
-            //check if we can validate reponse data
-            if (currentAction.hasOwnProperty("validateResponseData")) {
-              //collect response data
-              let reponseData = [];
+      //attach handlers
+      attachRequestErrorHandlers(request, logger);
 
-              //add length to counter on received data
-              response
-                .on("data", (chunk) => {
-                  reponseData.push(chunk);
-                })
-                //validate data on completion of data sending
-                .on("end", () => {
-                  if (currentAction.validateResponseData(reponseData.join(), response)) {
-                    logger.success("Response data passed action specific validation.");
-                  } else {
-                    logger.error("Response data didn't pass action specific validation.");
-                  }
-                });
-            } else {
-              logger.warn("Cannot validate response data.")
-            }
-          }
-        }
-      );
+      //send post data if fucntion given to produce it
+      if (currentAction.hasOwnProperty("getPostData")) {
+        request.write(currentAction.getPostData());
+      }
 
-    //attach handlers
-    attachRequestErrorHandlers(request, logger);
-
-    //send post data if fucntion given to produce it
-    if (currentAction.hasOwnProperty("getPostData")) {
-      request.write(currentAction.getPostData());
+      //done sending request
+      request.end();
+    } else {
+      //device type cannot perform this action
+      logger.warn("This device type doesn't have the action '" + actionName + "'.")
     }
-
-    //done sending request
-    request.end();
   } else {
-    //device type cannot perform this action
-    logger.warn("This device type doesn't have the action '" + actionName + "'.")
+    logger.error("This device type cannot perform any actions.");
   }
 }
 
@@ -345,13 +350,13 @@ function action(host, actionName, actionParams) {
   const logger = createLogger("[" + host + "]");
 
   //get device type and do action then
-  getHostConfig("192.168.2.160", (config) => {
+  getHostConfig(host, (config) => {
     //do action on success determining device type
     performAction(host, config, actionName, logger, actionParams);
   }, logger);
 }
 
 //change password for host, action  has property setPassword in actionParams
-action("192.168.2.11", "setWifiPassword", {
+action("192.168.2.1", "setWifiPassword", {
   setPassword: "A3fgnX5688bZ4y" //arbitrary
 });
