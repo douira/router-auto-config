@@ -148,7 +148,7 @@ function asPercent(fraction) {
 }
 
 //attaches timout and error handlers to requests
-function attachRequestErrorHandlers(request) {
+function attachRequestErrorHandlers(request, logger) {
   //keeps track of if an timeout has occured
   let timedOut = false;
 
@@ -211,7 +211,7 @@ function getHostConfig(host, callback, logger) {
     );
 
   //attach handlers
-  attachRequestErrorHandlers(request);
+  attachRequestErrorHandlers(request, logger);
 
   //done sending request
   request.end();
@@ -262,7 +262,7 @@ function performAction(host, config, actionName, logger, actionParams) {
 
     //add host and timeout option property
     requestOptions.hostname = host;
-    requestOptions.timeout =
+    requestOptions.timeout = actionTimeout;
 
     //send request to perform action
     const request = http
@@ -324,7 +324,7 @@ function performAction(host, config, actionName, logger, actionParams) {
       );
 
     //attach handlers
-    attachRequestErrorHandlers(request);
+    attachRequestErrorHandlers(request, logger);
 
     //send post data if fucntion given to produce it
     if (currentAction.hasOwnProperty("getPostData")) {
