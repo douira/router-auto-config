@@ -1,7 +1,8 @@
 const http = require("http");
+const querystring = require('querystring');
+
 const colors = require("colors/safe");
 const values = require('object.values');
-const querystring = require('querystring');
 
 //shim Object.values
 if (! Object.values) {
@@ -99,7 +100,11 @@ const routerConfigs = [
           }
         },
         validateResponse: (data, response) => {
-          return response.statusCode === 302; //redirect
+          return response.statusCode === 302;
+        },
+        validateResponseData: (data, responseData, response) => {
+          console.log(responseData);
+          return responseData.indexOf("wait0.stm") >= 0;
         }
       }
     }
@@ -417,5 +422,5 @@ function action(host, actionName, actionParams) {
   setPassword: "A3fgnX5688bZ4y" //arbitrary
 });*/
 action("192.168.2.1", "setWifiPassword", {
-  setPassword: "blah" //arbitrary
+  setPassword: "blah"
 });
