@@ -1,6 +1,7 @@
 const http = require("http");
 const colors = require("colors/safe");
 const values = require('object.values');
+const querystring = require('querystring');
 
 //shim Object.values
 if (! Object.values) {
@@ -11,6 +12,7 @@ if (! Object.values) {
 const confidenceThreshold = 0.8; //minimum confidence to accept best determined device config
 const probeTimeout = 2000; //device determining request timeout
 const actionTimeout = 15000; //action timeout, loger than probeTimeout, because it may take the device some time to actually do what we told it to do
+const requestUserAgent = "router-auto-config by douira"; //what to send as user agent in html headers
 
 //validate ok with reponse code 200
 function okWithCode200(data, response) {
@@ -81,8 +83,24 @@ const routerConfigs = [
       password: "snip"
     },
     actions: {
-      setWfiPassword: {
-
+      setWifiPassword: {
+        getOptions: (data, host) => {
+          return {
+            path: "/cgi-bin/login.exe",
+            headers: {
+              Referer: "http://" + host + "/",
+              Origin: "http://" + host,
+            }
+          };
+        },
+        getPostData: (data) => {
+          return {
+            pws: data.password
+          }
+        },
+        validateResponse: (data, response) => {
+          return response.statusCode === 302; //redirect
+        }
       }
     }
   }
@@ -193,6 +211,20 @@ function attachRequestErrorHandlers(request, logger) {
     });
 }
 
+//adds the user agent to request options header property
+function addUserAgentInfo(options) {
+  //create headers object if not present
+  if (! options.hasOwnProperty("headers")) {
+    options.headers = {};
+  }
+
+  //add user agent name
+  options.headers["User-Agent"] = requestUserAgent;
+
+  //return modified options
+  return options;
+}
+
 //finds the correct config for a given host address
 function getHostConfig(host, callback, logger) {
   //send request to get reponse headers
@@ -200,11 +232,11 @@ function getHostConfig(host, callback, logger) {
   const request = http
     //send GET to host
     .request(
-      //bare bones
-      {
+      //host and timeout, add user agent too
+      addUserAgentInfo({
         hostname: host,
         timeout: probeTimeout
-      },
+      }),
       (response) => {
         //logger.info("HEADERS: " + JSON.stringify(response.headers));
 
@@ -287,6 +319,9 @@ function performAction(host, config, actionName, logger, actionParams) {
       requestOptions.hostname = host;
       requestOptions.timeout = actionTimeout;
 
+      //user agent prop
+      addUserAgentInfo(requestOptions);
+
       //send request to perform action
       const request = http
         .request(
@@ -320,7 +355,6 @@ function performAction(host, config, actionName, logger, actionParams) {
 
             //proceed with response data validation
             if (validated) {
-              //logger.info("HEADERS: " + JSON.stringify(response.headers));
               //check if we can validate reponse data
               if (currentAction.hasOwnProperty("validateResponseData")) {
                 //collect response data
@@ -351,7 +385,8 @@ function performAction(host, config, actionName, logger, actionParams) {
 
       //send post data if fucntion given to produce it
       if (currentAction.hasOwnProperty("getPostData")) {
-        request.write(currentAction.getPostData());
+        //stringify form data object
+        request.write(querystring.stringify(currentAction.getPostData()));
       }
 
       //done sending request
@@ -381,3 +416,6 @@ function action(host, actionName, actionParams) {
 /*action("192.168.2.160", "setWifiPassword", {
   setPassword: "A3fgnX5688bZ4y" //arbitrary
 });*/
+action("192.168.2.1", "setWifiPassword", {
+  setPassword: "blah" //arbitrary
+});
