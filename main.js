@@ -3,7 +3,13 @@ const colors = require("colors/safe");
 
 //settings
 const confidenceThreshold = 0.9; //minimum confidence to accept best determined device config
-const probeTimeout = 1000; //device determining request timeout
+const probeTimeout = 2000; //device determining request timeout
+const actionTimeout = 5000; //action timeout, loger than probeTimeout, because it may take the device some time to actually do what we told it to do
+
+//function to validate with reponse code 200
+function okWithCode200(data, response) {
+  return response.statusCode === 200;
+}
 
 //what routers we know and how to deal with them
 const routerConfigs = [
@@ -19,7 +25,7 @@ const routerConfigs = [
       userName: "admin",
       password: "HXBn3506yvxA"
     },
-    actions: { //actions that can be acalled on this router
+    actions: { //actions that can be called on this router
       setWifiPassword: {
         //more data, passed as data.actionData to action performing functions
         actionData: {
@@ -27,23 +33,26 @@ const routerConfigs = [
             "/userRpm/WlanSecurityRpm.htm?secType=3&pskSecOpt=3&pskCipher=1&pskSecret=",   "&interval=0&wpaSecOpt=3&wpaCipher=1&radiusIp=&radiusPort=1812&radiusSecret=&intervalWpa=0&wepSecOpt=3&keytype=1&keynum=1&key1=&length1=0&key2=&length2=0&key3=&length3=0&key4=&length4=0&Save=Save"
           ]
         },
-        //function returns http request options object
-        getOptions: (data, host, actionParams) => {
-          //object has host, the correct referrer, auth and the action GET data
+        //function returns http request options object, host is attached outside of this, required
+        getOptions: (data, host) => {
+          //the correct referrer, auth and the action GET data
           return {
-            hostname: host,
-            auth: loginData.userName + ":" + loginData.password, //auth with basic https auth
-            path: data.actionData.pathParts[0] + actionParams.setPassword + data.actionData.pathParts[1],
+            auth: data.userName + ":" + data.password, //auth with basic https auth
+            path: data.actionData.pathParts[0] + data.actionParams.setPassword + data.actionData.pathParts[1],
             headers: {
               Referer: "http://" + host //makes the router happy, it just wants this, otherwise we get a 401
             }
           };
         },
-        //if it had been necessary, we could give a function here of which the reponse is sent for POST requests
+
+        //returns data to send after the request headers for POST requests, optional
         //getPostData: (data) => { ... },
-        //function verifies action success
-        verify: (data, reponseData) => {
-          return reponseData.indexOf(newPassword) >= 0;
+
+        //validates action success with response
+        validateResponse: okWithCode200,
+        //function verifies action success with data body sent, optional
+        validateResponseData: (data, reponseData, response) => {
+          return reponseData.indexOf(data.actionParams.setPassword) >= 0;
         }
       }
     }
@@ -138,16 +147,36 @@ function asPercent(fraction) {
   return Math.ceil(fraction * 100)
 }
 
-//finds the correct config for a given host address
-function getHostConfig(host, callback) {
-  const logger = createLogger("[" + host + "]");
-
+//attaches timout and error handlers to requests
+function attachRequestErrorHandlers(request) {
   //keeps track of if an timeout has occured
   let timedOut = false;
 
+  request
+    //timeout handler
+    .once("timeout", () => {
+      //took too long for device to respond
+      logger.error("Request timeout after " + probeTimeout + "ms: Device took too long to respond.");
+
+      //actually stop the request
+      request.abort();
+
+      //set flag to prevent another error message
+      timedOut = true;
+    })
+    //handle errors by printing them
+    .on("error", (e) => {
+      if (! timedOut) {
+        logger.error("Problem with request: " + e.message);
+      }
+    });
+}
+
+//finds the correct config for a given host address
+function getHostConfig(host, callback, logger) {
   //send request to get reponse headers
   logger.info("Determining device type...");
-  let request = http
+  const request = http
     //send GET to host
     .request(
       //bare bones
@@ -179,26 +208,150 @@ function getHostConfig(host, callback) {
           logger.error("Device type could not be determined.")
         }
       }
-    )
-    .once("timeout", () => {
-      //took too long for device to respond
-      logger.error("Request timeout after " + probeTimeout + "ms: Device took too long to respond.");
+    );
 
-      //actually stop the request
-      request.abort();
-
-      //set flag to prevent another error message
-      timedOut = true;
-    })
-    //handle errors by printing them
-    .on("error", (e) => {
-      if (! timedOut) {
-        logger.error("Problem with request: " + e.message);
-      }
-    });
+  //attach handlers
+  attachRequestErrorHandlers(request);
 
   //done sending request
   request.end();
 }
 
-getHostConfig("192.168.2.160", (config) => {});
+//preprocesses action by binding config data to action functions
+function preprocessAction(config, action, actionParams) {
+  //data to attach
+  let data = config.data;
+
+  //also has action specific data, if given
+  if (action.hasOwnProperty("actionData")) {
+    data.actionData = action.actionData;
+  }
+
+  //add actionParams to data
+  data.actionParams = actionParams;
+
+  //for all props of action that are functions
+  for (let actionProp in action) {
+    //is action function
+    if (typeof action[actionProp] === "function") {
+      //bind data argument and config as this
+      action[actionProp] = action[actionProp].bind(config, data);
+    }
+  }
+
+  //return processed action
+  return action;
+}
+
+//performs named action with given host and it's config, also gets additional data with actionParams
+function performAction(host, config, actionName, logger, actionParams) {
+  logger.info("Attempting to perform action '" + actionName + "'...");
+
+  //use empty object if not given
+  if (typeof actionParams === "undefined") {
+    actionParams = {};
+  }
+
+  //check that this device has this action
+  if (config.actions.hasOwnProperty(actionName)) {
+    //preprocess action to perform
+    const currentAction = preprocessAction(config, config.actions[actionName], actionParams);
+
+    //get request options from action
+    let requestOptions = currentAction.getOptions(host);
+
+    //add host and timeout option property
+    requestOptions.hostname = host;
+    requestOptions.timeout =
+
+    //send request to perform action
+    const request = http
+      .request(
+        //processed options
+        requestOptions,
+        //handles reponse to verify success
+        (response) => {
+          //flag set to true if response is ok
+          let validated = false;
+
+          //use function if given to validate reponse
+          if (currentAction.hasOwnProperty("validateResponse")) {
+            //validate with function
+            validated = currentAction.validateResponse(response);
+            if (validated) {
+              logger.success("Reponse passed action specific validation.")
+            } else {
+              logger.error("Response didn't pass action specific validation.");
+            }
+          } else {
+            const statusCode = response.statusCode;
+
+            //ok with status code 200
+            validated = statusCode === 200;
+            if (validated) {
+              logger.warn("Validated reponse with status code 200.")
+            } else {
+              logger.error("Response error with status code " + statusCode + " returned.");
+            }
+          }
+
+          //proceed with response data validation
+          if (validated) {
+            //logger.info("HEADERS: " + JSON.stringify(response.headers));
+            //check if we can validate reponse data
+            if (currentAction.hasOwnProperty("validateResponseData")) {
+              //collect response data
+              let reponseData = [];
+
+              //add length to counter on received data
+              response
+                .on("data", (chunk) => {
+                  reponseData.push(chunk);
+                })
+                //validate data on completion of data sending
+                .on("end", () => {
+                  if (currentAction.validateResponseData(reponseData.join(), response)) {
+                    logger.success("Response data passed action specific validation.");
+                  } else {
+                    logger.error("Response data didn't pass action specific validation.");
+                  }
+                });
+            } else {
+              logger.warn("Cannot validate response data.")
+            }
+          }
+        }
+      );
+
+    //attach handlers
+    attachRequestErrorHandlers(request);
+
+    //send post data if fucntion given to produce it
+    if (currentAction.hasOwnProperty("getPostData")) {
+      request.write(currentAction.getPostData());
+    }
+
+    //done sending request
+    request.end();
+  } else {
+    //device type cannot perform this action
+    logger.warn("This device type doesn't have the action '" + actionName + "'.")
+  }
+}
+
+//combines determining device type and performing the action itself
+function action(host, actionName, actionParams) {
+  //create logger for host
+  const logger = createLogger("[" + host + "]");
+
+  //get device type and do action then
+  getHostConfig("192.168.2.160", (config) => {
+    //do action on success determining device type
+    performAction(host, config, actionName, logger, actionParams);
+  }, logger);
+}
+
+//change password for host, action  has property setPassword in actionParams
+action("192.168.2.11", "setWifiPassword", {
+  setPassword: "A3fgnX5688bZ4y" //arbitrary
+});

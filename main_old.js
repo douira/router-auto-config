@@ -87,7 +87,7 @@ var loginData = {
       console.log("HEADERS: " + JSON.stringify(response.headers));
     }
   )
-  //handle errors by printing them
+  //handle errors by printing them ;-)
   .on("error", (e) => {
     console.log(colors.red("problem with request: " + e.message));
   })
