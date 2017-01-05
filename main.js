@@ -1,12 +1,18 @@
 const http = require("http");
 const colors = require("colors/safe");
+const values = require('object.values');
+
+//shim Object.values
+if (! Object.values) {
+    values.shim();
+}
 
 //settings
-const confidenceThreshold = 0.9; //minimum confidence to accept best determined device config
+const confidenceThreshold = 0.8; //minimum confidence to accept best determined device config
 const probeTimeout = 2000; //device determining request timeout
 const actionTimeout = 5000; //action timeout, loger than probeTimeout, because it may take the device some time to actually do what we told it to do
 
-//function to validate with reponse code 200
+//validate ok with reponse code 200
 function okWithCode200(data, response) {
   return response.statusCode === 200;
 }
@@ -14,18 +20,22 @@ function okWithCode200(data, response) {
 //what routers we know and how to deal with them
 const routerConfigs = [
   {
-    name: "TP-LINK WR710N", //type display name
-    fingerprint: { //fields in reponse headers to check for equality, gotten from direct test request
+    //type display name
+    name: "TP-LINK WR710N",
+    //fields in reponse headers to check for equality, gotten from direct test request
+    fingerprint: {
       "server":"Router Webserver",
-      "connection":"close",
+      "connection+":"close",
       "www-authenticate":"Basic realm=\"TP-LINK 150Mbps Wireless N Mini Pocket Router WR710N\"",
       "content-type":"text/html"
     },
-    data: { //additional data needed to perform actions
+    //additional data needed to perform actions
+    data: {
       userName: "admin",
       password: "HXBn3506yvxA"
     },
-    actions: { //actions that can be called on this router
+    //actions which can be called on this router
+    actions: {
       setWifiPassword: {
         //more data, passed as data.actionData to action performing functions
         actionData: {
@@ -66,6 +76,14 @@ const routerConfigs = [
       "connection":"close",
       "content-type":"text/html",
       "content-length":"29923"
+    },
+    data: {
+      password: "snip"
+    },
+    actions: {
+      setWfiPassword: {
+
+      }
     }
   }
 ];
@@ -111,9 +129,12 @@ function matchHeaders(headers) {
           confidence ++;
 
           //check match with given headers
-          if (headers.hasOwnProperty(checkName)) {
+          if (headers[checkName] === config.fingerprint[checkName]) {
             confidence ++;
           }
+        } //confidence point if value exists in headers but with other key name
+        else if (Object.values(headers).some((value) => value === config.fingerprint[checkName])) {
+          confidence ++;
         }
       }
 
@@ -201,7 +222,7 @@ function getHostConfig(host, callback, logger) {
             callback(result.config);
           } else {
             //less than threshold
-            logger.error("Device type could not be determined with " + asPercent(result.confidence) + " < " + asPercent(confidenceThreshold) + "% sufficient confidence.");
+            logger.error("Insufficient confidence determining device type: " + asPercent(result.confidence) + "% < " + asPercent(confidenceThreshold) + "%");
           }
         } else {
           //found no device
@@ -357,6 +378,6 @@ function action(host, actionName, actionParams) {
 }
 
 //change password for host, action  has property setPassword in actionParams
-action("192.168.2.1", "setWifiPassword", {
+action("192.168.2.160", "setWifiPassword", {
   setPassword: "A3fgnX5688bZ4y" //arbitrary
 });
