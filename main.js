@@ -103,7 +103,7 @@ const routerConfigs = [
           return response.statusCode === 302;
         },
         validateResponseData: (data, responseData, response) => {
-          console.log(responseData);
+          //console.log(responseData);
           return responseData.indexOf("wait0.stm") >= 0;
         }
       }
