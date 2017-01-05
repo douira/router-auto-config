@@ -10,7 +10,7 @@ if (! Object.values) {
 //settings
 const confidenceThreshold = 0.8; //minimum confidence to accept best determined device config
 const probeTimeout = 2000; //device determining request timeout
-const actionTimeout = 5000; //action timeout, loger than probeTimeout, because it may take the device some time to actually do what we told it to do
+const actionTimeout = 15000; //action timeout, loger than probeTimeout, because it may take the device some time to actually do what we told it to do
 
 //validate ok with reponse code 200
 function okWithCode200(data, response) {
@@ -25,7 +25,7 @@ const routerConfigs = [
     //fields in reponse headers to check for equality, gotten from direct test request
     fingerprint: {
       "server":"Router Webserver",
-      "connection+":"close",
+      "connection":"close",
       "www-authenticate":"Basic realm=\"TP-LINK 150Mbps Wireless N Mini Pocket Router WR710N\"",
       "content-type":"text/html"
     },
@@ -302,7 +302,7 @@ function performAction(host, config, actionName, logger, actionParams) {
               //validate with function
               validated = currentAction.validateResponse(response);
               if (validated) {
-                logger.success("Reponse passed action specific validation.")
+                logger.success("Response passed action specific validation.")
               } else {
                 logger.error("Response didn't pass action specific validation.");
               }
