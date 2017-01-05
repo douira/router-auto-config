@@ -378,6 +378,6 @@ function action(host, actionName, actionParams) {
 }
 
 //change password for host, action  has property setPassword in actionParams
-action("192.168.2.160", "setWifiPassword", {
+/*action("192.168.2.160", "setWifiPassword", {
   setPassword: "A3fgnX5688bZ4y" //arbitrary
-});
+});*/
