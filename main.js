@@ -320,12 +320,31 @@ function performAction(host, config, actionName, logger, actionParams) {
       //get request options from action
       let requestOptions = currentAction.getOptions(host);
 
+      //we are doing a POST or not
+      const post = currentAction.hasOwnProperty("getPostData");
+
       //add host and timeout option property
       requestOptions.hostname = host;
       requestOptions.timeout = actionTimeout;
 
-      //user agent prop
+      //user agent prop, also add html headers prop
       addUserAgentInfo(requestOptions);
+
+      //method is post
+      let postData;
+      if (post) {
+        //add method as POST
+        requestOptions.method = "POST";
+
+        //get post data
+        postData = querystring.stringify(currentAction.getPostData());
+
+        //add length header
+        requestOptions.headers["Content-Length"] = Buffer.byteLength(postData)
+
+        //post content data type
+        requestOptions.headers["Content-Type"] = "application/x-www-form-urlencoded";
+      }
 
       //send request to perform action
       const request = http
@@ -388,10 +407,9 @@ function performAction(host, config, actionName, logger, actionParams) {
       //attach handlers
       attachRequestErrorHandlers(request, logger);
 
-      //send post data if fucntion given to produce it
-      if (currentAction.hasOwnProperty("getPostData")) {
-        //stringify form data object
-        request.write(querystring.stringify(currentAction.getPostData()));
+      //send post data if this is a post request
+      if (post) {
+        request.write(postData);
       }
 
       //done sending request
