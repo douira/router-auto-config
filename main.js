@@ -40,6 +40,10 @@ const routerConfigs = [
     //actions which can be called on this router
     actions: {
       setWifiPassword: {
+        //array of actions to perform before this one
+        //actionParams are carried along from root action, action data is action specific, config data is persistent
+        //prerequisites: ["..."],
+
         //more data, passed as data.actionData to action performing functions
         actionData: {
           pathParts: [
@@ -67,6 +71,9 @@ const routerConfigs = [
         validateResponseData: (data, reponseData, response) => {
           return reponseData.indexOf(data.actionParams.setPassword) >= 0;
         }
+
+        //uses reponse data and response headers to do things (as a prequisite for another action)
+        //useResponse: (data, reponseData, response) => { ... }
       }
     }
   },
@@ -85,6 +92,14 @@ const routerConfigs = [
     },
     actions: {
       setWifiPassword: {
+        prerequisites: ["login"],
+        getOptions: (data, host) => {
+          return {
+
+          }
+        },
+      },
+      login: {
         getOptions: (data, host) => {
           return {
             path: "/cgi-bin/login.exe",
@@ -100,11 +115,13 @@ const routerConfigs = [
           }
         },
         validateResponse: (data, response) => {
-          return response.statusCode === 302;
+          return response.statusCode === 302 && response.headers.hasOwnProperty("set-cookie");
         },
         validateResponseData: (data, responseData, response) => {
-          //console.log(responseData);
           return responseData.indexOf("wait0.stm") >= 0;
+        },
+        useResponse: (data, reponseData, response) => {
+
         }
       }
     }
@@ -302,121 +319,181 @@ function preprocessAction(config, action, actionParams) {
 }
 
 //performs named action with given host and it's config, also gets additional data with actionParams
-function performAction(host, config, actionName, logger, actionParams) {
-  logger.info("Attempting to perform action '" + actionName + "'...");
+function performAction(host, config, actionName, logger, actionParams, nextActions) {
+  //call next action if it's given
+  function complete() {
+    if (typeof nextActions !== "undefined" && nextActions.length) {
+
+      //get next action
+      const nextAction = nextActions.shift();
+
+      //perform next action and pass remaining actions on
+      performAction(host, config, nextAction, logger, actionParams, nextActions);
+    }
+  }
+
+  //true when prerequisitesSolved have been taken care of beforehand
+  let prerequisitesSolved = false;
+
+  //if action name is an object we set prerequisitesSolved and change actionName
+  if (actionName.hasOwnProperty("name")) {
+    prerequisitesSolved = true;
+    actionName = actionName.name;
+
+    //different log message, we are doing this action again after having resolved prerequisites
+    logger.info("Attempting to resume performing action '" + actionName + "'...");
+  } else {
+    logger.info("Attempting to perform action '" + actionName + "'...");
+  }
 
   //use empty object if not given
   if (typeof actionParams === "undefined") {
     actionParams = {};
   }
 
-  //check if device has nay actions
+  //check if device has any actions
   if (config.hasOwnProperty("actions")) {
-    //check that this device has this action
-    if (config.actions.hasOwnProperty(actionName)) {
+    //check that this device has this action and that the action returns options
+    if (config.actions.hasOwnProperty(actionName) && config.actions[actionName].hasOwnProperty("getOptions")) {
       //preprocess action to perform
       const currentAction = preprocessAction(config, config.actions[actionName], actionParams);
 
-      //get request options from action
-      let requestOptions = currentAction.getOptions(host);
+      //check if we need to do other actions beforehand
+      if (! prerequisitesSolved && currentAction.hasOwnProperty("prerequisites") && currentAction.prerequisites.length) {
+        logger.info("Prerequisite actions(s) performed before the current one: " + currentAction.prerequisites.join(", "));
 
-      //we are doing a POST or not
-      const post = currentAction.hasOwnProperty("getPostData");
+        //get prerequisite actions, exlcuding first one
+        let actions = currentAction.prerequisites.slice(1);
 
-      //add host and timeout option property
-      requestOptions.hostname = host;
-      requestOptions.timeout = actionTimeout;
+        //add current one as last
+        actions.push({ //prerequisites have been taken care of!
+          name: actionName
+        });
 
-      //user agent prop, also add html headers prop
-      addUserAgentInfo(requestOptions);
+        //add current next actions after the current action
+        if (typeof nextActions !== "undefined") {
+          actions.push(...nextActions);
+        }
 
-      //method is post
-      let postData;
-      if (post) {
-        //add method as POST
-        requestOptions.method = "POST";
+        //perform action with first prerequisite and added next actions
+        performAction(host, config, currentAction.prerequisites[0], logger, actionParams, actions);
+      } else { //do action now
+        //get request options from action
+        let requestOptions = currentAction.getOptions(host);
 
-        //get post data
-        postData = querystring.stringify(currentAction.getPostData());
+        //we are doing a POST or not
+        const post = currentAction.hasOwnProperty("getPostData");
 
-        //add length header
-        requestOptions.headers["Content-Length"] = Buffer.byteLength(postData)
+        //add host and timeout option property
+        requestOptions.hostname = host;
+        requestOptions.timeout = actionTimeout;
 
-        //post content data type
-        requestOptions.headers["Content-Type"] = "application/x-www-form-urlencoded";
-      }
+        //user agent prop, also add html headers prop
+        addUserAgentInfo(requestOptions);
 
-      //send request to perform action
-      const request = http
-        .request(
-          //processed options
-          requestOptions,
-          //handles reponse to verify success
-          (response) => {
-            //flag set to true if response is ok
-            let validated = false;
+        //method is post
+        let postData;
+        if (post) {
+          //add method as POST
+          requestOptions.method = "POST";
 
-            //use function if given to validate reponse
-            if (currentAction.hasOwnProperty("validateResponse")) {
-              //validate with function
-              validated = currentAction.validateResponse(response);
-              if (validated) {
-                logger.success("Response passed action specific validation.")
+          //get post data
+          postData = querystring.stringify(currentAction.getPostData());
+
+          //add length header
+          requestOptions.headers["Content-Length"] = Buffer.byteLength(postData)
+
+          //post content data type
+          requestOptions.headers["Content-Type"] = "application/x-www-form-urlencoded";
+        }
+
+        //send request to perform action
+        const request = http
+          .request(
+            //processed options
+            requestOptions,
+            //handles reponse to verify success
+            (response) => {
+              //flag set to true if response is ok
+              let validated = false;
+
+              //use function if given to validate reponse
+              if (currentAction.hasOwnProperty("validateResponse")) {
+                //validate with function
+                validated = currentAction.validateResponse(response);
+                if (validated) {
+                  logger.success("Response passed action specific validation.")
+                } else {
+                  logger.error("Response didn't pass action specific validation.");
+                }
               } else {
-                logger.error("Response didn't pass action specific validation.");
+                const statusCode = response.statusCode;
+
+                //ok with status code 200
+                validated = statusCode === 200;
+                if (validated) {
+                  logger.warn("Validated reponse with status code 200.")
+                } else {
+                  logger.error("Response error with status code " + statusCode + " returned.");
+                }
               }
-            } else {
-              const statusCode = response.statusCode;
 
-              //ok with status code 200
-              validated = statusCode === 200;
+              //proceed with response data validation
               if (validated) {
-                logger.warn("Validated reponse with status code 200.")
-              } else {
-                logger.error("Response error with status code " + statusCode + " returned.");
+                //check if we can validate reponse data
+                if (currentAction.hasOwnProperty("validateResponseData")) {
+                  //collect response data
+                  let reponseData = [];
+
+                  //add length to counter on received data
+                  response
+                    .on("data", (chunk) => {
+                      reponseData.push(chunk);
+                    })
+                    //validate data on completion of data sending
+                    .on("end", () => {
+                      //reponse data string
+                      const reponseString = reponseData.join();
+
+                      //validate response data
+                      if (currentAction.validateResponseData(reponseString, response)) {
+                        logger.success("Response data passed action specific validation.");
+
+                        //use reponse data (for next action for example)
+                        if (currentAction.hasOwnProperty("useResponse")) {
+                          currentAction.useResponse(reponseString, response);
+                        }
+
+                        //completion callback
+                        complete();
+                      } else {
+                        logger.error("Response data didn't pass action specific validation.");
+                      }
+                    });
+                } else {
+                  logger.warn("Cannot validate response data.")
+                }
               }
             }
+          );
 
-            //proceed with response data validation
-            if (validated) {
-              //check if we can validate reponse data
-              if (currentAction.hasOwnProperty("validateResponseData")) {
-                //collect response data
-                let reponseData = [];
+        //attach handlers
+        attachRequestErrorHandlers(request, logger);
 
-                //add length to counter on received data
-                response
-                  .on("data", (chunk) => {
-                    reponseData.push(chunk);
-                  })
-                  //validate data on completion of data sending
-                  .on("end", () => {
-                    if (currentAction.validateResponseData(reponseData.join(), response)) {
-                      logger.success("Response data passed action specific validation.");
-                    } else {
-                      logger.error("Response data didn't pass action specific validation.");
-                    }
-                  });
-              } else {
-                logger.warn("Cannot validate response data.")
-              }
-            }
-          }
-        );
+        //send post data if this is a post request
+        if (post) {
+          request.write(postData);
+        }
 
-      //attach handlers
-      attachRequestErrorHandlers(request, logger);
-
-      //send post data if this is a post request
-      if (post) {
-        request.write(postData);
+        //done sending request
+        request.end();
       }
-
-      //done sending request
-      request.end();
     } else {
       //device type cannot perform this action
-      logger.warn("This device type doesn't have the action '" + actionName + "'.")
+      logger.warn("This device type doesn't have a valid action '" + actionName + "'.");
+
+      //completion callback
+      complete();
     }
   } else {
     logger.error("This device type cannot perform any actions.");
@@ -426,7 +503,7 @@ function performAction(host, config, actionName, logger, actionParams) {
 //combines determining device type and performing the action itself
 function action(host, actionName, actionParams) {
   //create logger for host
-  const logger = createLogger("[" + host + "]");
+  logger = createLogger("[" + host + "]");
 
   //get device type and do action then
   getHostConfig(host, (config) => {
