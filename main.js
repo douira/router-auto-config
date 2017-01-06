@@ -43,6 +43,8 @@ const routerConfigs = [
         //array of actions to perform before this one
         //actionParams are carried along from root action, action data is action specific, config data is persistent
         //prerequisites: ["..."],
+        //array of actions to do directly after this action, like prerequisites
+        //doAfter: ["..."],
 
         //more data, passed as data.actionData to action performing functions
         actionData: {
@@ -88,31 +90,54 @@ const routerConfigs = [
       "content-length":"29923"
     },
     data: {
-      password: "snip"
+      password: "snip",
+      loginCookie: null //not gotten yet
     },
     actions: {
       setWifiPassword: {
         prerequisites: ["login"],
+        doAfter: ["logout"],
+        actionData: {
+          path: "/main_wifi.stm"
+        },
         getOptions: (data, host) => {
           return {
-
-          }
+            path: data.actionData.path,
+            headers: {
+              Referer: "http://" + host + "/main_overview.stm",
+              Cookie: data.loginCookie
+            }
+          };
         },
+        validateResponse: (data, response) => {
+          return true;
+        },
+        validateResponseData: (data, responseData, response) => {
+          return true;
+        },
+        useResponse: (data, responseData, response) => {
+          console.log(responseData.split("\n").slice(0, 25).join("\n"));
+          console.log(response.headers);
+        }
       },
       login: {
+        actionData: {
+          path: "/cgi-bin/login.exe"
+        },
         getOptions: (data, host) => {
           return {
-            path: "/cgi-bin/login.exe",
+            path: data.actionData.path,
             headers: {
               Referer: "http://" + host + "/",
               Origin: "http://" + host,
+              Cookie: data.loginCookie
             }
           };
         },
         getPostData: (data) => {
           return {
             pws: data.password
-          }
+          };
         },
         validateResponse: (data, response) => {
           return response.statusCode === 302 && response.headers.hasOwnProperty("set-cookie");
@@ -120,8 +145,9 @@ const routerConfigs = [
         validateResponseData: (data, responseData, response) => {
           return responseData.indexOf("wait0.stm") >= 0;
         },
-        useResponse: (data, reponseData, response) => {
-
+        useResponse: (data, responseData, response) => {
+          //get cookie
+          data.loginCookie = response.headers["set-cookie"][0].split(";")[0];
         }
       }
     }
@@ -294,24 +320,30 @@ function getHostConfig(host, callback, logger) {
 
 //preprocesses action by binding config data to action functions
 function preprocessAction(config, action, actionParams) {
-  //data to attach
-  let data = config.data;
+  //check if already processed
+  if (! action.hasOwnProperty("processed")) {
+    //data to attach
+    let data = config.data;
 
-  //also has action specific data, if given
-  if (action.hasOwnProperty("actionData")) {
-    data.actionData = action.actionData;
-  }
-
-  //add actionParams to data
-  data.actionParams = actionParams;
-
-  //for all props of action that are functions
-  for (let actionProp in action) {
-    //is action function
-    if (typeof action[actionProp] === "function") {
-      //bind data argument and config as this
-      action[actionProp] = action[actionProp].bind(config, data);
+    //also has action specific data, if given
+    if (action.hasOwnProperty("actionData")) {
+      data.actionData = action.actionData;
     }
+
+    //add actionParams to data
+    data.actionParams = actionParams;
+
+    //for all props of action that are functions
+    for (let actionProp in action) {
+      //is action function
+      if (typeof action[actionProp] === "function") {
+        //bind data argument and config as this
+        action[actionProp] = action[actionProp].bind(config, data);
+      }
+    }
+
+    //add processed flag
+    action.processed = true;
   }
 
   //return processed action
@@ -359,24 +391,43 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
       const currentAction = preprocessAction(config, config.actions[actionName], actionParams);
 
       //check if we need to do other actions beforehand
-      if (! prerequisitesSolved && currentAction.hasOwnProperty("prerequisites") && currentAction.prerequisites.length) {
-        logger.info("Prerequisite actions(s) performed before the current one: " + currentAction.prerequisites.join(", "));
+      const prereqPresent = currentAction.hasOwnProperty("prerequisites") && currentAction.prerequisites.length;
+      const afterPresent = currentAction.hasOwnProperty("doAfter") && currentAction.doAfter.length;
+      if (! prerequisitesSolved && (prereqPresent || afterPresent)) {
+        //next actions to be done, includes directly next one
+        let actions = [];
 
-        //get prerequisite actions, exlcuding first one
-        let actions = currentAction.prerequisites.slice(1);
+        //prerequisite actions present
+        if (prereqPresent) {
+          logger.info("Prerequisite action" + (currentAction.prerequisites.length > 1 ? "s" : "") + " performed before the current one: " + currentAction.prerequisites.join(", "));
 
-        //add current one as last
-        actions.push({ //prerequisites have been taken care of!
+          //add prerequisite actions
+          actions.push(...currentAction.prerequisites.slice());
+        }
+
+        //add current one
+        actions.push({ //prerequisites and doAfters have been taken care of!
           name: actionName
         });
 
-        //add current next actions after the current action
+        //following actions present
+        if (afterPresent) {
+          logger.info("Following action" + (currentAction.doAfter.length > 1 ? "s" : "") + " performed after the current one: " + currentAction.doAfter.join(", "));
+
+          //add following actions
+          actions.push(...currentAction.doAfter.slice());
+        }
+
+        //add current next actions after the current actions
         if (typeof nextActions !== "undefined") {
           actions.push(...nextActions);
         }
 
+        //copy to nextActions
+        nextActions = actions;
+
         //perform action with first prerequisite and added next actions
-        performAction(host, config, currentAction.prerequisites[0], logger, actionParams, actions);
+        complete();
       } else { //do action now
         //get request options from action
         let requestOptions = currentAction.getOptions(host);
@@ -517,5 +568,5 @@ function action(host, actionName, actionParams) {
   setPassword: "A3fgnX5688bZ4y" //arbitrary
 });*/
 action("192.168.2.1", "setWifiPassword", {
-  setPassword: "blah"
+  setPassword: "blahblah"
 });
