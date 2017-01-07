@@ -92,7 +92,7 @@ const routerConfigs = [
       "content-length":"29923"
     },
     data: {
-      password: "scott12345",
+      password: "snip",
       loginCookie: null, //not gotten yet
       httoken: null
     },
@@ -568,12 +568,15 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
                         if (currentAction.hasOwnProperty("useResponse")) {
                           currentAction.useResponse(reponseString, response);
                         }
+
+                        //print data if enabled
                         if (printVerboseData) {
                           console.log("OPTIONS: " + requestOptions);
                           console.log("CONFIG DATA: " + config.data);
                           console.log("RESPONSE HEADERS: " + response.headers);
                           console.log("RESPONSE DATA: " + reponseString.split("\n").slice(0, 25).join("\n"));
                         }
+
                         //completion callback
                         complete();
                       } else {
@@ -618,24 +621,50 @@ function action(host, actionNames, actionParams) {
   //create logger for host
   logger = createLogger("[" + host + "]");
 
-  //fill nextActions with next actions if actionNames is an array
+  //array of actions to be passed as next actions
   const nextActions = [];
+
+  //true if there are any actions given
+  let anyAction = actionNames.length > 0;
+
+  //actionNames is an array
   if (typeof actionNames === "object") {
-    nextActions.push(...actionNames.slice(1));
-    actionNames = actionNames[0];
+    //remove empty actions
+    actionNames = actionNames.filter((name) => name.length);
+
+    //still actions left
+    if (actionNames.length) {
+      //list is longer than a single element
+      if (actionNames.length > 1) {
+        logger.info("Performing list of actions: " + actionNames.join(", "));
+
+        //set next actions to list of actions without the first one
+        nextActions.push(...actionNames.slice(1));
+      }
+
+      //current action is the first one
+      actionNames = actionNames[0];
+    } else {
+      //no actions after all
+      anyAction = false;
+    }
   }
 
   //get device type and do action then
-  getHostConfig(host, (config) => {
-    //do actions on success determining device type
-    performAction(host, config, actionNames, logger, actionParams, nextActions);
-  }, logger);
+  if (anyAction) {
+    getHostConfig(host, (config) => {
+      //do actions on success determining device type
+      performAction(host, config, actionNames, logger, actionParams, nextActions);
+    }, logger);
+  } else {
+    logger.warn("No action(s) specified.");
+  }
 }
 
 //change password for host, action  has property setPassword in actionParams
 /*action("192.168.2.160", "setWifiPassword", {
   setPassword: "A3fgnX5688bZ4y" //arbitrary
 });*/
-action("192.168.2.1", "login", {
+action("192.168.2.1", [], {
   //setPassword: "blahblah"
 });
