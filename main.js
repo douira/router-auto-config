@@ -1,5 +1,6 @@
 const http = require("http");
 const querystring = require('querystring');
+const util = require('util')
 //const vm = require('vm');
 
 const colors = require("colors/safe");
@@ -15,7 +16,7 @@ const confidenceThreshold = 0.8; //minimum confidence to accept best determined 
 const probeTimeout = 6000; //device determining request timeout
 const actionTimeout = 15000; //action timeout, loger than probeTimeout, because it may take the device some time to actually do what we told it to do
 const requestUserAgent = "router-auto-config by douira"; //what to send as user agent in html headers
-const printVerboseData = true; //enable to print lots of data about what's happening
+const printVerboseData = false; //enable to print lots of data about what's happening
 
 //validate ok with reponse code 200
 function okWithCode200(data, response) {
@@ -95,7 +96,7 @@ const routerConfigs = [
       "content-length":"29923"
     },
     data: {
-      password: "snip",
+      password: "scott12345",
       loginCookie: null, //both not gotten yet
       httoken: null
     },
@@ -159,7 +160,8 @@ const routerConfigs = [
       getToken: {
         dependencies: ["login"],
         actionData: {
-          path: "/main_overview.stm"
+          path: "/main_overview.stm",
+          blah: 65564
         },
         getOptions: (data, host) => {
           return {
@@ -217,12 +219,13 @@ const routerConfigs = [
 
 //returns object with logger functions
 function createLogger(prefix) {
-  return [
+  const loggers = [
     //name of logger function with color name
     ["info", "cyan"],
     ["success", "green"],
     ["warn", "yellow"],
-    ["error", "red"]
+    ["error", "red"],
+    ["debugBare", "magenta"]
   ].reduce((obj, logType) => {
     //add colorized logger
     obj[logType[0]] = (str) => {
@@ -233,6 +236,20 @@ function createLogger(prefix) {
     //return modified object
     return obj;
   }, {});
+
+  //add wrapper to debug function
+  loggers.debug = (name, data) => {
+    //convert to string with utils if object
+    if (typeof data === "object") {
+      data = util.inspect(data);
+    }
+
+    //now print normally
+    loggers.debugBare(name.toUpperCase() + ": " + data);
+  };
+
+  //return loggers
+  return loggers;
 }
 
 //determines number of properties an object has
@@ -428,7 +445,8 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
       actionHistory.push(actionName);
 
       //perform next action and pass remaining actions on
-      setTimeout(performAction.bind(undefined, host, config, nextAction, logger, actionParams, nextActions, actionHistory), 5000);
+      performAction(host, config, nextAction, logger, actionParams, nextActions, actionHistory);
+      //setTimeout(performAction.bind(undefined, host, config, nextAction, logger, actionParams, nextActions, actionHistory), 0);
     }
   }
 
@@ -460,8 +478,8 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
   if (config.hasOwnProperty("actions")) {
     //check that this device has this action and that the action returns options
     if (config.actions.hasOwnProperty(actionName) && config.actions[actionName].hasOwnProperty("getOptions")) {
-      //preprocess action to perform
-      const currentAction = preprocessAction(config, config.actions[actionName], actionParams);
+      //current action to perform
+      let currentAction = config.actions[actionName];
 
       //check if we need to do other actions beforehand, any time beforehand or next
       const beforePresent = checkArrayPropertyLength(currentAction, "doBefore");
@@ -517,6 +535,9 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
         //perform action with first doBefore and added next actions
         complete();
       } else { //do action now
+        //preprocess action to perform
+        currentAction = preprocessAction(config, currentAction, actionParams);
+
         //get request options from action
         let requestOptions = currentAction.getOptions(host);
 
@@ -544,6 +565,12 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
 
           //post content data type
           requestOptions.headers["Content-Type"] = "application/x-www-form-urlencoded";
+        }
+
+        if (printVerboseData) {
+          logger.debug("options", requestOptions);
+          logger.debug("config data", config.data);
+          logger.debug("action", currentAction);
         }
 
         //send request to perform action
@@ -576,6 +603,11 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
               }
             }
 
+            if (printVerboseData) {
+              logger.debug("response headers", response.headers);
+              logger.debug("response code", response.statusCode)
+            }
+
             //proceed with response data validation
             if (validated) {
               //check if we can validate reponse data
@@ -593,6 +625,10 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
                     //reponse data string
                     const reponseString = reponseData.join();
 
+                    if (printVerboseData) {
+                      logger.debug("reponse data", reponseString.split("\n").slice(0, 25).join("\n"));
+                    }
+
                     //validate response data
                     if (currentAction.validateResponseData(reponseString, response)) {
                       logger.success("Response data passed action specific validation.");
@@ -600,14 +636,6 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
                       //use reponse data (for next action for example)
                       if (currentAction.hasOwnProperty("useResponse")) {
                         currentAction.useResponse(reponseString, response);
-                      }
-
-                      //print data if enabled
-                      if (printVerboseData) {
-                        console.log("OPTIONS: " + requestOptions);
-                        console.log("CONFIG DATA: " + config.data);
-                        console.log("RESPONSE HEADERS: " + response.headers);
-                        console.log("RESPONSE DATA: " + reponseString.split("\n").slice(0, 25).join("\n"));
                       }
 
                       //completion callback
@@ -629,7 +657,7 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
         //send post data if this is a post request
         if (post) {
           if (printVerboseData) {
-            console.log("POST: " + postData);
+            logger.debug("post", postData);
           }
           request.write(postData);
         }
