@@ -1,5 +1,6 @@
 const http = require("http");
 const querystring = require('querystring');
+//const vm = require('vm');
 
 const colors = require("colors/safe");
 const values = require('object.values');
@@ -11,9 +12,10 @@ if (! Object.values) {
 
 //settings
 const confidenceThreshold = 0.8; //minimum confidence to accept best determined device config
-const probeTimeout = 2000; //device determining request timeout
+const probeTimeout = 6000; //device determining request timeout
 const actionTimeout = 15000; //action timeout, loger than probeTimeout, because it may take the device some time to actually do what we told it to do
 const requestUserAgent = "router-auto-config by douira"; //what to send as user agent in html headers
+const printVerboseData = false; //enable to print lots of data about what's happening
 
 //validate ok with reponse code 200
 function okWithCode200(data, response) {
@@ -40,10 +42,10 @@ const routerConfigs = [
     //actions which can be called on this router
     actions: {
       setWifiPassword: {
-        //array of actions to perform before this one
+        //array of actions to perform right before this one
         //actionParams are carried along from root action, action data is action specific, config data is persistent
-        //prerequisites: ["..."],
-        //array of actions to do directly after this action, like prerequisites
+        //doBefore: ["..."],
+        //array of actions to do directly after this action, like doBefore
         //doAfter: ["..."],
 
         //more data, passed as data.actionData to action performing functions
@@ -90,12 +92,13 @@ const routerConfigs = [
       "content-length":"29923"
     },
     data: {
-      password: "snip",
-      loginCookie: null //not gotten yet
+      password: "scott12345",
+      loginCookie: null, //not gotten yet
+      httoken: null
     },
     actions: {
       setWifiPassword: {
-        prerequisites: ["login"],
+        doBefore: ["login"],
         doAfter: ["logout"],
         actionData: {
           path: "/main_wifi.stm"
@@ -116,11 +119,11 @@ const routerConfigs = [
           return true;
         },
         useResponse: (data, responseData, response) => {
-          console.log(responseData.split("\n").slice(0, 25).join("\n"));
-          console.log(response.headers);
+
         }
       },
       login: {
+        doAfter: ["getToken"],
         actionData: {
           path: "/cgi-bin/login.exe"
         },
@@ -148,6 +151,59 @@ const routerConfigs = [
         useResponse: (data, responseData, response) => {
           //get cookie
           data.loginCookie = response.headers["set-cookie"][0].split(";")[0];
+        }
+      },
+      getToken: {
+        actionData: {
+          path: "/main_overview.stm"
+        },
+        getOptions: (data, host) => {
+          return {
+            path: data.actionData.path,
+            headers: {
+              Referer: "http://" + host + "/",
+              Origin: "http://" + host,
+              Cookie: data.loginCookie
+            }
+          };
+        },
+        validateResponse: okWithCode200,
+        validateResponseData: (data, responseData, response) => {
+          //if this string appears somewhere it's probably ok
+          return responseData.indexOf("_httoken") >= 0;
+        },
+        useResponse: (data, responseData, response) => {
+          //get httoken by evaulating line 23, wghich hold the js string to set the token
+          data.httoken = eval(responseData.split("\n")[23] + "_httoken");
+        }
+      },
+      logout: {
+        actionData: {
+          path: "/cgi-bin/logout.exe"
+        },
+        getOptions: (data, host) => {
+          return {
+            path: data.actionData.path,
+            headers: {
+              Cookie: data.loginCookie
+            }
+          };
+        },
+        getPostData: (data) => {
+          return {
+            httoken: data.httoken
+          };
+        },
+        validateResponse: (data, response) => {
+          return response.statusCode === 302 &&
+                 response.headers.hasOwnProperty("set-cookie") &&
+                 response.headers["set-cookie"][0].indexOf("deleted") >= 0; //has delete cookie action
+        },
+        validateResponseData: (data, responseData, response) => {
+          return responseData.indexOf("wait0.stm") >= 0;
+        },
+        useResponse: (data, responseData, response) => {
+
         }
       }
     }
@@ -286,12 +342,10 @@ function getHostConfig(host, callback, logger) {
         timeout: probeTimeout
       }),
       (response) => {
-        //logger.info("HEADERS: " + JSON.stringify(response.headers));
-
         //use headers in fingerprints to determine device type
         let result = matchHeaders(response.headers);
 
-        //atually found a device type
+        //actually found a device type
         if (result.config) {
           //minimum confidence
           if (result.confidence >= confidenceThreshold) {
@@ -364,15 +418,15 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
     }
   }
 
-  //true when prerequisitesSolved have been taken care of beforehand
-  let prerequisitesSolved = false;
+  //true when orderSolved have been taken care of beforehand
+  let orderSolved = false;
 
-  //if action name is an object we set prerequisitesSolved and change actionName
+  //if action name is an object we set orderSolved and change actionName
   if (actionName.hasOwnProperty("name")) {
-    prerequisitesSolved = true;
+    orderSolved = true;
     actionName = actionName.name;
 
-    //different log message, we are doing this action again after having resolved prerequisites
+    //different log message, we are doing this action again after having resolved doBefores
     logger.info("Attempting to resume performing action '" + actionName + "'...");
   } else {
     logger.info("Attempting to perform action '" + actionName + "'...");
@@ -391,22 +445,22 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
       const currentAction = preprocessAction(config, config.actions[actionName], actionParams);
 
       //check if we need to do other actions beforehand
-      const prereqPresent = currentAction.hasOwnProperty("prerequisites") && currentAction.prerequisites.length;
+      const beforePresent = currentAction.hasOwnProperty("doBefore") && currentAction.doBefore.length;
       const afterPresent = currentAction.hasOwnProperty("doAfter") && currentAction.doAfter.length;
-      if (! prerequisitesSolved && (prereqPresent || afterPresent)) {
+      if (! orderSolved && (beforePresent || afterPresent)) {
         //next actions to be done, includes directly next one
         let actions = [];
 
-        //prerequisite actions present
-        if (prereqPresent) {
-          logger.info("Prerequisite action" + (currentAction.prerequisites.length > 1 ? "s" : "") + " performed before the current one: " + currentAction.prerequisites.join(", "));
+        //doBefore actions present
+        if (beforePresent) {
+          logger.info("Preceding action" + (currentAction.doBefore.length > 1 ? "s" : "") + " performed before the current one: " + currentAction.doBefore.join(", "));
 
-          //add prerequisite actions
-          actions.push(...currentAction.prerequisites.slice());
+          //add doBefore actions
+          actions.push(...currentAction.doBefore.slice());
         }
 
         //add current one
-        actions.push({ //prerequisites and doAfters have been taken care of!
+        actions.push({ //doBefores and doAfters have been taken care of!
           name: actionName
         });
 
@@ -426,7 +480,7 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
         //copy to nextActions
         nextActions = actions;
 
-        //perform action with first prerequisite and added next actions
+        //perform action with first doBefore and added next actions
         complete();
       } else { //do action now
         //get request options from action
@@ -514,7 +568,12 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
                         if (currentAction.hasOwnProperty("useResponse")) {
                           currentAction.useResponse(reponseString, response);
                         }
-
+                        if (printVerboseData) {
+                          console.log("OPTIONS: " + requestOptions);
+                          console.log("CONFIG DATA: " + config.data);
+                          console.log("RESPONSE HEADERS: " + response.headers);
+                          console.log("RESPONSE DATA: " + reponseString.split("\n").slice(0, 25).join("\n"));
+                        }
                         //completion callback
                         complete();
                       } else {
@@ -533,6 +592,9 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
 
         //send post data if this is a post request
         if (post) {
+          if (printVerboseData) {
+            console.log("POST: " + postData);
+          }
           request.write(postData);
         }
 
@@ -552,14 +614,21 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
 }
 
 //combines determining device type and performing the action itself
-function action(host, actionName, actionParams) {
+function action(host, actionNames, actionParams) {
   //create logger for host
   logger = createLogger("[" + host + "]");
 
+  //fill nextActions with next actions if actionNames is an array
+  const nextActions = [];
+  if (typeof actionNames === "object") {
+    nextActions.push(...actionNames.slice(1));
+    actionNames = actionNames[0];
+  }
+
   //get device type and do action then
   getHostConfig(host, (config) => {
-    //do action on success determining device type
-    performAction(host, config, actionName, logger, actionParams);
+    //do actions on success determining device type
+    performAction(host, config, actionNames, logger, actionParams, nextActions);
   }, logger);
 }
 
@@ -567,6 +636,6 @@ function action(host, actionName, actionParams) {
 /*action("192.168.2.160", "setWifiPassword", {
   setPassword: "A3fgnX5688bZ4y" //arbitrary
 });*/
-action("192.168.2.1", "setWifiPassword", {
-  setPassword: "blahblah"
+action("192.168.2.1", "login", {
+  //setPassword: "blahblah"
 });
