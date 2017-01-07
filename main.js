@@ -17,6 +17,7 @@ const probeTimeout = 6000; //device determining request timeout
 const actionTimeout = 15000; //action timeout, loger than probeTimeout, because it may take the device some time to actually do what we told it to do
 const requestUserAgent = "router-auto-config by douira"; //what to send as user agent in html headers
 const printVerboseData = false; //enable to print lots of data about what's happening
+const completeWithNoDataValidation = true; //continue evem when the response data isn't validated
 
 //validate ok with reponse code 200
 function okWithCode200(data, response) {
@@ -113,7 +114,6 @@ const routerConfigs = [
           return {
             path: data.actionData.path,
             headers: {
-              Referer: "http://" + host + "/main_overview.stm",
               Cookie: data.loginCookie
             }
           };
@@ -136,18 +136,12 @@ const routerConfigs = [
         },
         getOptions: (data, host) => {
           return {
-            path: data.actionData.path,
-            headers: {
-              Referer: "http://" + host + "/",
-              Origin: "http://" + host,
-              Cookie: data.loginCookie
-            }
+            path: data.actionData.path
           };
         },
         getPostData: (data) => {
           return {
-            pws: data.password,
-            httoken: data.httoken
+            pws: data.password
           };
         },
         validateResponse: (data, response) => {
@@ -164,15 +158,12 @@ const routerConfigs = [
       getToken: {
         dependencies: ["login"],
         actionData: {
-          path: "/main_overview.stm",
-          blah: 65564
+          path: "/main_overview.stm"
         },
         getOptions: (data, host) => {
           return {
             path: data.actionData.path,
             headers: {
-              Referer: "http://" + host + "/",
-              Origin: "http://" + host,
               Cookie: data.loginCookie
             }
           };
@@ -184,7 +175,7 @@ const routerConfigs = [
         },
         useResponse: (data, responseData, response) => {
           //get httoken by evaulating line 23, which holds the js string to set the token
-          data.httoken = eval(responseData.split("\n")[23] + "_httoken");
+          data.httoken = eval("var _httoken = 0; " + responseData.split("\n")[23] + " _httoken");
         }
       },
       logout: {
@@ -267,51 +258,51 @@ function getObjectPropAmount(obj) {
 //uses fingerprints to determine the best device match for the reponse headers
 function matchHeaders(headers) {
   return routerConfigs
-    //match with all configs and calculate similarity to fingerprints
-    .map((config) => {
-      //determine match confidence
-      let confidence = 0;
+  //match with all configs and calculate similarity to fingerprints
+  .map((config) => {
+    //determine match confidence
+    let confidence = 0;
 
-      //for all fingerprint fieds
-      for (let checkName in config.fingerprint) {
-        //check presence in given headers
-        if (headers.hasOwnProperty(checkName)) {
-          //similarity increases confidence
-          confidence ++;
+    //for all fingerprint fieds
+    for (let checkName in config.fingerprint) {
+      //check presence in given headers
+      if (headers.hasOwnProperty(checkName)) {
+        //similarity increases confidence
+        confidence ++;
 
-          //check match with given headers
-          if (headers[checkName] === config.fingerprint[checkName]) {
-            confidence ++;
-          }
-        } //confidence point if value exists in headers but with other key name
-        else if (Object.values(headers).some((value) => value === config.fingerprint[checkName])) {
+        //check match with given headers
+        if (headers[checkName] === config.fingerprint[checkName]) {
           confidence ++;
         }
-      }
-
-      //check header amount match
-      if (getObjectPropAmount(config.fingerprint) === getObjectPropAmount(headers)) {
+      } //confidence point if value exists in headers but with other key name
+      else if (Object.values(headers).some((value) => value === config.fingerprint[checkName])) {
         confidence ++;
       }
+    }
 
-      //return confidence as percentage by dividing through possible max amount of points
-      return confidence / (getObjectPropAmount(config.fingerprint) * 2 + 1);
-    })
-    //find config for highest confidence value
-    .reduce((best, confidence, configIndex) => {
-      //confidence is largest than current best
-      if (best.confidence < confidence) {
-        //change best to new confidence and config
-        best.confidence = confidence;
-        best.config = routerConfigs[configIndex];
-      }
+    //check header amount match
+    if (getObjectPropAmount(config.fingerprint) === getObjectPropAmount(headers)) {
+      confidence ++;
+    }
 
-      //return modifed object
-      return best;
-    }, {
-      confidence: 0,
-      config: null
-    });
+    //return confidence as percentage by dividing through possible max amount of points
+    return confidence / (getObjectPropAmount(config.fingerprint) * 2 + 1);
+  })
+  //find config for highest confidence value
+  .reduce((best, confidence, configIndex) => {
+    //confidence is largest than current best
+    if (best.confidence < confidence) {
+      //change best to new confidence and config
+      best.confidence = confidence;
+      best.config = routerConfigs[configIndex];
+    }
+
+    //return modifed object
+    return best;
+  }, {
+    confidence: 0,
+    config: null
+  });
 }
 
 //return decimal number as percent int
@@ -325,23 +316,23 @@ function attachRequestErrorHandlers(request, logger) {
   let timedOut = false;
 
   request
-    //timeout handler
-    .once("timeout", () => {
-      //took too long for device to respond
-      logger.error("Request timeout after " + request.timeout + "ms: Device took too long to respond.");
+  //timeout handler
+  .once("timeout", () => {
+    //took too long for device to respond
+    logger.error("Request timeout after " + request.timeout + "ms: Device took too long to respond.");
 
-      //actually stop the request
-      request.abort();
+    //actually stop the request
+    request.abort();
 
-      //set flag to prevent another error message
-      timedOut = true;
-    })
-    //handle errors by printing them
-    .on("error", (e) => {
-      if (! timedOut) {
-        logger.error("Problem with request: " + e.message);
-      }
-    });
+    //set flag to prevent another error message
+    timedOut = true;
+  })
+  //handle errors by printing them
+  .on("error", (e) => {
+    if (! timedOut) {
+      logger.error("Problem with request: " + e.message);
+    }
+  });
 }
 
 //adds the user agent to request options header property
@@ -363,36 +354,36 @@ function getHostConfig(host, callback, logger) {
   //send request to get reponse headers
   logger.info("Determining device type...");
   const request = http
-    //send GET to host
-    .request(
-      //host and timeout, add user agent too
-      addUserAgentInfo({
-        hostname: host,
-        timeout: probeTimeout
-      }),
-      (response) => {
-        //use headers in fingerprints to determine device type
-        let result = matchHeaders(response.headers);
+  //send GET to host
+  .request(
+    //host and timeout, add user agent too
+    addUserAgentInfo({
+      hostname: host,
+      timeout: probeTimeout
+    }),
+    (response) => {
+      //use headers in fingerprints to determine device type
+      let result = matchHeaders(response.headers);
 
-        //actually found a device type
-        if (result.config) {
-          //minimum confidence
-          if (result.confidence >= confidenceThreshold) {
-            //warn if not 100%
-            logger[result.confidence === 1 ? "success" : "warn"]("Device is '" + result.config.name + "' with " + asPercent(result.confidence) + "% confidence.");
+      //actually found a device type
+      if (result.config) {
+        //minimum confidence
+        if (result.confidence >= confidenceThreshold) {
+          //warn if not 100%
+          logger[result.confidence === 1 ? "success" : "warn"]("Device is '" + result.config.name + "' with " + asPercent(result.confidence) + "% confidence.");
 
-            //callback with determined device config
-            callback(result.config);
-          } else {
-            //less than threshold
-            logger.error("Insufficient confidence determining device type: " + asPercent(result.confidence) + "% < " + asPercent(confidenceThreshold) + "%");
-          }
+          //callback with determined device config
+          callback(result.config);
         } else {
-          //found no device
-          logger.error("Device type could not be determined.")
+          //less than threshold
+          logger.error("Insufficient confidence determining device type: " + asPercent(result.confidence) + "% < " + asPercent(confidenceThreshold) + "%");
         }
+      } else {
+        //found no device
+        logger.error("Device type could not be determined.")
       }
-    );
+    }
+  );
 
   //attach handlers
   attachRequestErrorHandlers(request, logger);
@@ -445,10 +436,19 @@ function puralS(array) {
   return array.length > 1 ? "s" : "";
 }
 
+//print that the response headers were validated, message dependent on validatiob method type
+function printResponseValidMsg(specificResponseValidation) {
+  if (specificResponseValidation) {
+    logger.success("Response passed action specific validation.");
+  } else {
+    logger.warn("Validated reponse with status code 200.");
+  }
+}
+
 //performs named action with given host and it's config, also gets additional data with actionParams
 function performAction(host, config, actionName, logger, actionParams, nextActions, actionHistory) {
   //call next action if it's given
-  function complete() {
+  let complete = () => {
     if (typeof nextActions !== "undefined" && nextActions.length) {
       //get next action
       const nextAction = nextActions.shift();
@@ -618,15 +618,14 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
           //handles reponse to verify success
           (response) => {
             //flag set to true if response is ok
-            let validated = false;
+            let validated;
 
             //use function if given to validate reponse
-            if (currentAction.hasOwnProperty("validateResponse")) {
+            const specificResponseValidation = currentAction.hasOwnProperty("validateResponse");
+            if (specificResponseValidation) {
               //validate with function
               validated = currentAction.validateResponse(response);
-              if (validated) {
-                logger.success("Response passed action specific validation.")
-              } else {
+              if (! validated) {
                 logger.error("Response didn't pass action specific validation.");
               }
             } else {
@@ -634,52 +633,77 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
 
               //ok with status code 200
               validated = statusCode === 200;
-              if (validated) {
-                logger.warn("Validated reponse with status code 200.")
-              } else {
+              if (! validated) {
                 logger.error("Response error with status code " + statusCode + " returned.");
               }
             }
+            //successful header validation messages are printed later to try to merge them with the data validation messages
 
             logger.debug("response headers", response.headers);
             logger.debug("response code", response.statusCode);
+            logger.debug("validated headers", validated);
 
             //proceed with response data validation
             if (validated) {
-              //check if we can validate reponse data
-              if (currentAction.hasOwnProperty("validateResponseData")) {
+              //check for existance of functions that use response data
+              const usesResponseData = currentAction.hasOwnProperty("useResponse");
+              const specificDataValidation = currentAction.hasOwnProperty("validateResponseData");
+
+              //check if we have to collect the reponse data
+              if (printVerboseData || usesResponseData || specificDataValidation) {
                 //collect response data
                 let reponseData = [];
 
                 //add length to counter on received data
                 response
-                  .on("data", (chunk) => {
-                    reponseData.push(chunk);
-                  })
-                  //validate data on completion of data sending
-                  .on("end", () => {
-                    //reponse data string
-                    const reponseString = reponseData.join();
+                .on("data", (chunk) => {
+                  //collect data chunks
+                  reponseData.push(chunk);
+                })
+                //validate data on completion of data sending
+                .on("end", () => {
+                  //reponse data string
+                  const reponseString = reponseData.join();
 
-                    logger.debug("reponse data", reponseString.split("\n").slice(0, 25).join("\n"));
+                  logger.debug("response data", reponseString.split("\n").slice(0, 35).join("\n"));
 
-                    //validate response data
+                  //use reponse data (for next action for example)
+                  if (usesResponseData) {
+                    currentAction.useResponse(reponseString, response);
+                  }
+
+                  //validate response data
+                  if (specificDataValidation) {
                     if (currentAction.validateResponseData(reponseString, response)) {
-                      logger.success("Response data passed action specific validation.");
-
-                      //use reponse data (for next action for example)
-                      if (currentAction.hasOwnProperty("useResponse")) {
-                        currentAction.useResponse(reponseString, response);
+                      if (specificResponseValidation) {
+                        logger.success("Response headers and data passed action specific validation.");
+                      } else {
+                        printResponseValidMsg(false);
+                        logger.success("Response data passed action specific validation.");
                       }
 
                       //completion callback
                       complete();
                     } else {
+                      printResponseValidMsg(specificResponseValidation);
                       logger.error("Response data didn't pass action specific validation.");
                     }
-                  });
-              } else {
-                logger.warn("Cannot validate response data.")
+                  } else if (completeWithNoDataValidation) {
+                    //complete if we're allowed and only here for logging
+                    complete();
+                  }
+                });
+              }
+
+              //action does not have function for specific data validation
+              if (! specificDataValidation) {
+                printResponseValidMsg(specificResponseValidation);
+                logger.warn("Cannot validate response data.");
+
+                //complete if allowed
+                if (completeWithNoDataValidation && ! usesResponseData) {
+                  complete();
+                }
               }
             }
           }
