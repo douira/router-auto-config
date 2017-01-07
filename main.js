@@ -243,13 +243,16 @@ function createLogger(prefix) {
 
   //add wrapper to debug function
   loggers.debug = (name, data) => {
-    //convert to string with utils if object
-    if (typeof data === "object") {
-      data = util.inspect(data);
-    }
+    //onyl if enabled
+    if (printVerboseData) {
+      //convert to string with utils if object
+      if (typeof data === "object") {
+        data = util.inspect(data);
+      }
 
-    //now print normally
-    loggers.debugBare(name.toUpperCase() + ": " + data);
+      //now print normally
+      loggers.debugBare(name.toUpperCase() + ": " + data);
+    }
   };
 
   //return loggers
@@ -468,10 +471,15 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
     actionName = actionName.name;
 
     //different log message, we are doing this action again after having resolved doBefores
-    logger.info("Resuming to perform action '" + actionName + "'...");
+    if (actionName.orderAffected) {
+      logger.info("Resuming to perform action '" + actionName + "'...");
+    }
   } else {
     logger.info("Performing action '" + actionName + "'...");
   }
+
+  //order solve status
+  logger.debug("order solved", orderSolved);
 
   //empty if not given
   if (typeof actionParams === "undefined") {
@@ -488,7 +496,7 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
       //current action to perform
       let currentAction = config.actions[actionName];
 
-      //check if we need to do other actions beforehand, any time beforehand or next
+      //check if we need to do other actions beforehand, next, any time beforehand or sometime after this
       const beforePresent = checkArrayPropertyLength(currentAction, "doBefore");
       const afterPresent = checkArrayPropertyLength(currentAction, "doAfter");
       const depsPresent = checkArrayPropertyLength(currentAction, "dependencies");
@@ -497,6 +505,12 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
         //next actions to be done, includes directly next one
         let actions = [];
 
+        //that the action is an object singifies that ordering has been/will have been taken care of!
+        let currentActionObj = {
+          name: actionName,
+          orderAffected: beforePresent || afterPresent //set to true if actions we actually added
+        };
+
         //dependencies actions present and need to be adresses (not in history)
         if (depsPresent) {
           //filter out already done ones, that are present in the history
@@ -504,16 +518,17 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
 
           //there are any
           if (addDeps.length) {
-            logger.info("Performing following dependency action" + puralS(addDeps) + " first: " + addDeps.join(", "));
+            logger.info("Dependency action" + puralS(addDeps) + " scheduled before the current one: " + addDeps.join(", "));
 
             //add to next actions first, before doBefore
             actions.push(...addDeps);
+            currentActionObj.orderAffected = true;
           }
         }
 
         //doBefore actions present
         if (beforePresent) {
-          logger.info("Preceding action" + puralS(currentAction.doBefore) + " performed right before the current one: " + currentAction.doBefore.join(", "));
+          logger.info("Preceding action" + puralS(currentAction.doBefore) + " scheduled right before the current one: " + currentAction.doBefore.join(", "));
 
           //add doBefore actions
           actions.push(...currentAction.doBefore.slice());
@@ -525,13 +540,11 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
         }
 
         //add current one
-        actions.push({ //doBefores, doAfters and dependencies have been taken care of!
-          name: actionName
-        });
+        actions.push(currentActionObj);
 
         //following actions present
         if (afterPresent) {
-          logger.info("Following action" + puralS(currentAction.doAfter) + " performed directly after the current one: " + currentAction.doAfter.join(", "));
+          logger.info("Following action" + puralS(currentAction.doAfter) + " scheduled directly after the current one: " + currentAction.doAfter.join(", "));
 
           //add following actions
           actions.push(...currentAction.doAfter.slice());
@@ -547,9 +560,13 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
           //for each one, check if it doen't already appear after the current one
           const conseqActions = currentAction.consequences.filter((action) => actions.lastIndexOf(action) <= currentIndex);
 
-          //add to end of action list
-          logger.info("Followign action" + puralS(conseqActions) + " performed sometime after the current one: " + conseqActions.join(", "));
-          actions.push(...conseqActions);
+          //onyl if any still have to be done
+          if (conseqActions.length) {
+            //add to end of action list
+            logger.info("Following action" + puralS(conseqActions) + " scheduled sometime after the current one: " + conseqActions.join(", "));
+            actions.push(...conseqActions);
+            currentActionObj.orderAffected = true;
+          }
         }
 
         //copy to nextActions
@@ -590,11 +607,9 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
           requestOptions.headers["Content-Type"] = "application/x-www-form-urlencoded";
         }
 
-        if (printVerboseData) {
-          logger.debug("options", requestOptions);
-          logger.debug("config data", config.data);
-          logger.debug("action", currentAction);
-        }
+        logger.debug("options", requestOptions);
+        logger.debug("config data", config.data);
+        logger.debug("action", currentAction);
 
         //send request to perform action
         const request = http.request(
@@ -626,10 +641,8 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
               }
             }
 
-            if (printVerboseData) {
-              logger.debug("response headers", response.headers);
-              logger.debug("response code", response.statusCode)
-            }
+            logger.debug("response headers", response.headers);
+            logger.debug("response code", response.statusCode);
 
             //proceed with response data validation
             if (validated) {
@@ -648,9 +661,7 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
                     //reponse data string
                     const reponseString = reponseData.join();
 
-                    if (printVerboseData) {
-                      logger.debug("reponse data", reponseString.split("\n").slice(0, 25).join("\n"));
-                    }
+                    logger.debug("reponse data", reponseString.split("\n").slice(0, 25).join("\n"));
 
                     //validate response data
                     if (currentAction.validateResponseData(reponseString, response)) {
@@ -679,9 +690,7 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
 
         //send post data if this is a post request
         if (post) {
-          if (printVerboseData) {
-            logger.debug("post", postData);
-          }
+          logger.debug("post", postData);
           request.write(postData);
         }
 
