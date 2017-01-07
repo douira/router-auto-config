@@ -15,7 +15,7 @@ const confidenceThreshold = 0.8; //minimum confidence to accept best determined 
 const probeTimeout = 6000; //device determining request timeout
 const actionTimeout = 15000; //action timeout, loger than probeTimeout, because it may take the device some time to actually do what we told it to do
 const requestUserAgent = "router-auto-config by douira"; //what to send as user agent in html headers
-const printVerboseData = false; //enable to print lots of data about what's happening
+const printVerboseData = true; //enable to print lots of data about what's happening
 
 //validate ok with reponse code 200
 function okWithCode200(data, response) {
@@ -47,6 +47,9 @@ const routerConfigs = [
         //doBefore: ["..."],
         //array of actions to do directly after this action, like doBefore
         //doAfter: ["..."],
+        //untile doBefore this onyl requires the given actions to have been peformed sometime beforehand
+        //will only cause them to be performed beforehand, if they haven't ever been performed
+        //dependencies: ["..."],
 
         //more data, passed as data.actionData to action performing functions
         actionData: {
@@ -93,13 +96,12 @@ const routerConfigs = [
     },
     data: {
       password: "snip",
-      loginCookie: null, //not gotten yet
+      loginCookie: null, //both not gotten yet
       httoken: null
     },
     actions: {
       setWifiPassword: {
-        doBefore: ["login"],
-        doAfter: ["logout"],
+        dependencies: ["login"],
         actionData: {
           path: "/main_wifi.stm"
         },
@@ -139,7 +141,8 @@ const routerConfigs = [
         },
         getPostData: (data) => {
           return {
-            pws: data.password
+            pws: data.password,
+            httoken: data.httoken
           };
         },
         validateResponse: (data, response) => {
@@ -154,6 +157,7 @@ const routerConfigs = [
         }
       },
       getToken: {
+        dependencies: ["login"],
         actionData: {
           path: "/main_overview.stm"
         },
@@ -173,11 +177,12 @@ const routerConfigs = [
           return responseData.indexOf("_httoken") >= 0;
         },
         useResponse: (data, responseData, response) => {
-          //get httoken by evaulating line 23, wghich hold the js string to set the token
+          //get httoken by evaulating line 23, which holds the js string to set the token
           data.httoken = eval(responseData.split("\n")[23] + "_httoken");
         }
       },
       logout: {
+        dependencies: ["login"],
         actionData: {
           path: "/cgi-bin/logout.exe"
         },
@@ -404,17 +409,26 @@ function preprocessAction(config, action, actionParams) {
   return action;
 }
 
+//returns true if an object has a property and its length is larger than 1
+function checkArrayPropertyLength(object, propName) {
+  return object.hasOwnProperty(propName) &&
+         object[propName].hasOwnProperty["length"] &&
+         object[propName].length > 0;
+}
+
 //performs named action with given host and it's config, also gets additional data with actionParams
-function performAction(host, config, actionName, logger, actionParams, nextActions) {
+function performAction(host, config, actionName, logger, actionParams, nextActions, actionHistory) {
   //call next action if it's given
   function complete() {
     if (typeof nextActions !== "undefined" && nextActions.length) {
-
       //get next action
       const nextAction = nextActions.shift();
 
+      //add current action to history
+      actionHistory.push(actionName);
+
       //perform next action and pass remaining actions on
-      performAction(host, config, nextAction, logger, actionParams, nextActions);
+      setTimeout(performAction.bind(undefined, host, config, nextAction, logger, actionParams, nextActions, actionHistory), 5000);
     }
   }
 
@@ -427,14 +441,19 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
     actionName = actionName.name;
 
     //different log message, we are doing this action again after having resolved doBefores
-    logger.info("Attempting to resume performing action '" + actionName + "'...");
+    logger.info("Resuming to perform action '" + actionName + "'...");
   } else {
-    logger.info("Attempting to perform action '" + actionName + "'...");
+    logger.info("Performing action '" + actionName + "'...");
   }
 
   //use empty object if not given
   if (typeof actionParams === "undefined") {
     actionParams = {};
+  }
+
+  //empty history with no action if not given
+  if (typeof actionHistory === "undefined") {
+    actionHistory = [];
   }
 
   //check if device has any actions
@@ -444,12 +463,27 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
       //preprocess action to perform
       const currentAction = preprocessAction(config, config.actions[actionName], actionParams);
 
-      //check if we need to do other actions beforehand
-      const beforePresent = currentAction.hasOwnProperty("doBefore") && currentAction.doBefore.length;
-      const afterPresent = currentAction.hasOwnProperty("doAfter") && currentAction.doAfter.length;
-      if (! orderSolved && (beforePresent || afterPresent)) {
+      //check if we need to do other actions beforehand, any time beforehand or next
+      const beforePresent = checkArrayPropertyLength(currentAction, "doBefore");
+      const afterPresent = checkArrayPropertyLength(currentAction, "doAfter");
+      const depsPresent = checkArrayPropertyLength(currentAction, "dependencies");
+      if (! orderSolved && (beforePresent || afterPresent || depsPresent)) {
         //next actions to be done, includes directly next one
         let actions = [];
+
+        //dependencies actions present and need to be adresses (not in history)
+        if (depsPresent) {
+          //filter out already done ones, that are present in the history
+          const addDeps = currentAction.dependencies.filter((action) => ! actionHistory.includes(action));
+
+          //there are any
+          if (addDeps.length) {
+            logger.info("Performing following dependency action first: " + addDeps.join(", "));
+
+            //add to next actions first, before doBefore
+            actions.push(...addDeps);
+          }
+        }
 
         //doBefore actions present
         if (beforePresent) {
@@ -460,7 +494,7 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
         }
 
         //add current one
-        actions.push({ //doBefores and doAfters have been taken care of!
+        actions.push({ //doBefores, doAfters and dependencies have been taken care of!
           name: actionName
         });
 
@@ -513,82 +547,81 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
         }
 
         //send request to perform action
-        const request = http
-          .request(
-            //processed options
-            requestOptions,
-            //handles reponse to verify success
-            (response) => {
-              //flag set to true if response is ok
-              let validated = false;
+        const request = http.request(
+          //processed options
+          requestOptions,
+          //handles reponse to verify success
+          (response) => {
+            //flag set to true if response is ok
+            let validated = false;
 
-              //use function if given to validate reponse
-              if (currentAction.hasOwnProperty("validateResponse")) {
-                //validate with function
-                validated = currentAction.validateResponse(response);
-                if (validated) {
-                  logger.success("Response passed action specific validation.")
-                } else {
-                  logger.error("Response didn't pass action specific validation.");
-                }
-              } else {
-                const statusCode = response.statusCode;
-
-                //ok with status code 200
-                validated = statusCode === 200;
-                if (validated) {
-                  logger.warn("Validated reponse with status code 200.")
-                } else {
-                  logger.error("Response error with status code " + statusCode + " returned.");
-                }
-              }
-
-              //proceed with response data validation
+            //use function if given to validate reponse
+            if (currentAction.hasOwnProperty("validateResponse")) {
+              //validate with function
+              validated = currentAction.validateResponse(response);
               if (validated) {
-                //check if we can validate reponse data
-                if (currentAction.hasOwnProperty("validateResponseData")) {
-                  //collect response data
-                  let reponseData = [];
+                logger.success("Response passed action specific validation.")
+              } else {
+                logger.error("Response didn't pass action specific validation.");
+              }
+            } else {
+              const statusCode = response.statusCode;
 
-                  //add length to counter on received data
-                  response
-                    .on("data", (chunk) => {
-                      reponseData.push(chunk);
-                    })
-                    //validate data on completion of data sending
-                    .on("end", () => {
-                      //reponse data string
-                      const reponseString = reponseData.join();
-
-                      //validate response data
-                      if (currentAction.validateResponseData(reponseString, response)) {
-                        logger.success("Response data passed action specific validation.");
-
-                        //use reponse data (for next action for example)
-                        if (currentAction.hasOwnProperty("useResponse")) {
-                          currentAction.useResponse(reponseString, response);
-                        }
-
-                        //print data if enabled
-                        if (printVerboseData) {
-                          console.log("OPTIONS: " + requestOptions);
-                          console.log("CONFIG DATA: " + config.data);
-                          console.log("RESPONSE HEADERS: " + response.headers);
-                          console.log("RESPONSE DATA: " + reponseString.split("\n").slice(0, 25).join("\n"));
-                        }
-
-                        //completion callback
-                        complete();
-                      } else {
-                        logger.error("Response data didn't pass action specific validation.");
-                      }
-                    });
-                } else {
-                  logger.warn("Cannot validate response data.")
-                }
+              //ok with status code 200
+              validated = statusCode === 200;
+              if (validated) {
+                logger.warn("Validated reponse with status code 200.")
+              } else {
+                logger.error("Response error with status code " + statusCode + " returned.");
               }
             }
-          );
+
+            //proceed with response data validation
+            if (validated) {
+              //check if we can validate reponse data
+              if (currentAction.hasOwnProperty("validateResponseData")) {
+                //collect response data
+                let reponseData = [];
+
+                //add length to counter on received data
+                response
+                  .on("data", (chunk) => {
+                    reponseData.push(chunk);
+                  })
+                  //validate data on completion of data sending
+                  .on("end", () => {
+                    //reponse data string
+                    const reponseString = reponseData.join();
+
+                    //validate response data
+                    if (currentAction.validateResponseData(reponseString, response)) {
+                      logger.success("Response data passed action specific validation.");
+
+                      //use reponse data (for next action for example)
+                      if (currentAction.hasOwnProperty("useResponse")) {
+                        currentAction.useResponse(reponseString, response);
+                      }
+
+                      //print data if enabled
+                      if (printVerboseData) {
+                        console.log("OPTIONS: " + requestOptions);
+                        console.log("CONFIG DATA: " + config.data);
+                        console.log("RESPONSE HEADERS: " + response.headers);
+                        console.log("RESPONSE DATA: " + reponseString.split("\n").slice(0, 25).join("\n"));
+                      }
+
+                      //completion callback
+                      complete();
+                    } else {
+                      logger.error("Response data didn't pass action specific validation.");
+                    }
+                  });
+              } else {
+                logger.warn("Cannot validate response data.")
+              }
+            }
+          }
+        );
 
         //attach handlers
         attachRequestErrorHandlers(request, logger);
@@ -665,6 +698,6 @@ function action(host, actionNames, actionParams) {
 /*action("192.168.2.160", "setWifiPassword", {
   setPassword: "A3fgnX5688bZ4y" //arbitrary
 });*/
-action("192.168.2.1", [], {
+action("192.168.2.1", ["logout"], {
   //setPassword: "blahblah"
 });
