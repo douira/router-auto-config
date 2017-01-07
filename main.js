@@ -43,14 +43,17 @@ const routerConfigs = [
     //actions which can be called on this router
     actions: {
       setWifiPassword: {
-        //array of actions to perform right before this one
-        //actionParams are carried along from root action, action data is action specific, config data is persistent
-        //doBefore: ["..."],
-        //array of actions to do directly after this action, like doBefore
-        //doAfter: ["..."],
-        //untile doBefore this onyl requires the given actions to have been peformed sometime beforehand
-        //will only cause them to be performed beforehand, if they haven't ever been performed
-        //dependencies: ["..."],
+        /*array of actions to perform right before this one
+        #actionParams are carried along from root action, action data is action specific, config data is persistent
+        doBefore: ["..."],
+        #array of actions to do directly after this action, like doBefore
+        doAfter: ["..."],
+        #unlike doBefore this onyl requires the given actions to have been peformed sometime beforehand
+        #will only cause them to be performed beforehand, if they haven't ever been performed
+        dependencies: ["..."],
+        #like dependencies is to doBefore, these actions will be performed sometime after this, checked at end of action list
+        consequences: ["..."],
+        */
 
         //more data, passed as data.actionData to action performing functions
         actionData: {
@@ -96,7 +99,7 @@ const routerConfigs = [
       "content-length":"29923"
     },
     data: {
-      password: "scott12345",
+      password: "snip",
       loginCookie: null, //both not gotten yet
       httoken: null
     },
@@ -127,6 +130,7 @@ const routerConfigs = [
       },
       login: {
         doAfter: ["getToken"],
+        consequences: ["logout"],
         actionData: {
           path: "/cgi-bin/login.exe"
         },
@@ -433,6 +437,11 @@ function checkArrayPropertyLength(object, propName) {
          object[propName].length > 0;
 }
 
+//returns a plural s if given array is loger than one
+function puralS(array) {
+  return array.length > 1 ? "s" : "";
+}
+
 //performs named action with given host and it's config, also gets additional data with actionParams
 function performAction(host, config, actionName, logger, actionParams, nextActions, actionHistory) {
   //call next action if it's given
@@ -464,12 +473,10 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
     logger.info("Performing action '" + actionName + "'...");
   }
 
-  //use empty object if not given
+  //empty if not given
   if (typeof actionParams === "undefined") {
     actionParams = {};
   }
-
-  //empty history with no action if not given
   if (typeof actionHistory === "undefined") {
     actionHistory = [];
   }
@@ -485,7 +492,8 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
       const beforePresent = checkArrayPropertyLength(currentAction, "doBefore");
       const afterPresent = checkArrayPropertyLength(currentAction, "doAfter");
       const depsPresent = checkArrayPropertyLength(currentAction, "dependencies");
-      if (! orderSolved && (beforePresent || afterPresent || depsPresent)) {
+      const conseqPresent = checkArrayPropertyLength(currentAction, "consequences");
+      if (! orderSolved && (beforePresent || afterPresent || depsPresent || conseqPresent)) {
         //next actions to be done, includes directly next one
         let actions = [];
 
@@ -496,7 +504,7 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
 
           //there are any
           if (addDeps.length) {
-            logger.info("Performing following dependency action first: " + addDeps.join(", "));
+            logger.info("Performing following dependency action" + puralS(addDeps) + " first: " + addDeps.join(", "));
 
             //add to next actions first, before doBefore
             actions.push(...addDeps);
@@ -505,10 +513,15 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
 
         //doBefore actions present
         if (beforePresent) {
-          logger.info("Preceding action" + (currentAction.doBefore.length > 1 ? "s" : "") + " performed before the current one: " + currentAction.doBefore.join(", "));
+          logger.info("Preceding action" + puralS(currentAction.doBefore) + " performed right before the current one: " + currentAction.doBefore.join(", "));
 
           //add doBefore actions
           actions.push(...currentAction.doBefore.slice());
+        }
+
+        //index of current action in actions
+        if (conseqPresent) { //only conseqPresent needs this
+          var currentIndex = actions.length;
         }
 
         //add current one
@@ -518,7 +531,7 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
 
         //following actions present
         if (afterPresent) {
-          logger.info("Following action" + (currentAction.doAfter.length > 1 ? "s" : "") + " performed after the current one: " + currentAction.doAfter.join(", "));
+          logger.info("Following action" + puralS(currentAction.doAfter) + " performed directly after the current one: " + currentAction.doAfter.join(", "));
 
           //add following actions
           actions.push(...currentAction.doAfter.slice());
@@ -527,6 +540,16 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
         //add current next actions after the current actions
         if (typeof nextActions !== "undefined") {
           actions.push(...nextActions);
+        }
+
+        //add consequences to end of everything
+        if (conseqPresent) {
+          //for each one, check if it doen't already appear after the current one
+          const conseqActions = currentAction.consequences.filter((action) => actions.lastIndexOf(action) <= currentIndex);
+
+          //add to end of action list
+          logger.info("Followign action" + puralS(conseqActions) + " performed sometime after the current one: " + conseqActions.join(", "));
+          actions.push(...conseqActions);
         }
 
         //copy to nextActions
@@ -726,6 +749,6 @@ function action(host, actionNames, actionParams) {
 /*action("192.168.2.160", "setWifiPassword", {
   setPassword: "A3fgnX5688bZ4y" //arbitrary
 });*/
-action("192.168.2.1", ["logout"], {
+action("192.168.2.1", ["login"], {
   //setPassword: "blahblah"
 });
