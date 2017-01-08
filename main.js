@@ -1,3 +1,6 @@
+//TODO: test consequences
+
+
 const http = require("http");
 const querystring = require('querystring');
 const util = require('util')
@@ -63,26 +66,22 @@ const routerConfigs = [
           ]
         },
         //function returns http request options object, host is attached outside of this, required
-        getOptions: (data, host) => {
+        getOptions: (data, host) => ({
           //the correct referrer, auth and the action GET data
-          return {
-            auth: data.userName + ":" + data.password, //auth with basic https auth
-            path: data.actionData.pathParts[0] + data.actionParams.setPassword + data.actionData.pathParts[1],
-            headers: {
-              Referer: "http://" + host //makes the router happy, it just wants this, otherwise we get a 401
-            }
-          };
-        },
+          auth: data.userName + ":" + data.password, //auth with basic https auth
+          path: data.actionData.pathParts[0] + data.actionParams.setPassword + data.actionData.pathParts[1],
+          headers: {
+            Referer: "http://" + host //makes the router happy, it just wants this, otherwise we get a 401
+          }
+        }),
 
         //returns data to send after the request headers for POST requests, optional
-        //getPostData: (data) => { ... },
+        //getPostData: data => ({ ... }),
 
         //validates action success with response
         validateResponse: okWithCode200,
         //function verifies action success with data body sent, optional
-        validateResponseData: (data, reponseData, response) => {
-          return reponseData.indexOf(data.actionParams.setPassword) >= 0;
-        }
+        validateResponseData: (data, reponseData, response) => reponseData.indexOf(data.actionParams.setPassword) >= 0,
 
         //uses reponse data and response headers to do things (as a prequisite for another action)
         //useResponse: (data, reponseData, response) => { ... }
@@ -110,20 +109,14 @@ const routerConfigs = [
         actionData: {
           path: "/main_wifi.stm"
         },
-        getOptions: (data, host) => {
-          return {
-            path: data.actionData.path,
-            headers: {
-              Cookie: data.loginCookie
-            }
-          };
-        },
-        validateResponse: (data, response) => {
-          return true;
-        },
-        validateResponseData: (data, responseData, response) => {
-          return true;
-        },
+        getOptions: (data, host) => ({
+          path: data.actionData.path,
+          headers: {
+            Cookie: data.loginCookie
+          }
+        }),
+        validateResponse: (data, response) => true,
+        validateResponseData: (data, responseData, response) => true,
         useResponse: (data, responseData, response) => {
 
         }
@@ -134,22 +127,14 @@ const routerConfigs = [
         actionData: {
           path: "/cgi-bin/login.exe"
         },
-        getOptions: (data, host) => {
-          return {
-            path: data.actionData.path
-          };
-        },
-        getPostData: (data) => {
-          return {
-            pws: data.password
-          };
-        },
-        validateResponse: (data, response) => {
-          return response.statusCode === 302 && response.headers.hasOwnProperty("set-cookie");
-        },
-        validateResponseData: (data, responseData, response) => {
-          return responseData.indexOf("wait0.stm") >= 0;
-        },
+        getOptions: (data, host) => ({
+          path: data.actionData.path
+        }),
+        getPostData: data => ({
+          pws: data.password
+        }),
+        validateResponse: (data, response) => response.statusCode === 302 && response.headers.hasOwnProperty("set-cookie"),
+        validateResponseData: (data, responseData, response) => responseData.indexOf("wait0.stm") >= 0,
         useResponse: (data, responseData, response) => {
           //get cookie
           data.loginCookie = response.headers["set-cookie"][0].split(";")[0];
@@ -160,19 +145,15 @@ const routerConfigs = [
         actionData: {
           path: "/main_overview.stm"
         },
-        getOptions: (data, host) => {
-          return {
-            path: data.actionData.path,
-            headers: {
-              Cookie: data.loginCookie
-            }
-          };
-        },
+        getOptions: (data, host) => ({
+          path: data.actionData.path,
+          headers: {
+            Cookie: data.loginCookie
+          }
+        }),
         validateResponse: okWithCode200,
-        validateResponseData: (data, responseData, response) => {
-          //if this string appears somewhere it's probably ok
-          return responseData.indexOf("_httoken") >= 0;
-        },
+        //if this string appears somewhere it's probably ok
+        validateResponseData: (data, responseData, response) => responseData.indexOf("_httoken") >= 0,
         useResponse: (data, responseData, response) => {
           //get httoken by evaulating line 23, which holds the js string to set the token
           data.httoken = eval("var _httoken = 0; " + responseData.split("\n")[23] + " _httoken");
@@ -183,27 +164,19 @@ const routerConfigs = [
         actionData: {
           path: "/cgi-bin/logout.exe"
         },
-        getOptions: (data, host) => {
-          return {
-            path: data.actionData.path,
-            headers: {
-              Cookie: data.loginCookie
-            }
-          };
-        },
-        getPostData: (data) => {
-          return {
-            httoken: data.httoken
-          };
-        },
-        validateResponse: (data, response) => {
-          return response.statusCode === 302 &&
-                 response.headers.hasOwnProperty("set-cookie") &&
-                 response.headers["set-cookie"][0].indexOf("deleted") >= 0; //has delete cookie action
-        },
-        validateResponseData: (data, responseData, response) => {
-          return responseData.indexOf("wait0.stm") >= 0;
-        },
+        getOptions: (data, host) => ({
+          path: data.actionData.path,
+          headers: {
+            Cookie: data.loginCookie
+          }
+        }),
+        getPostData: data => ({
+          httoken: data.httoken
+        }),
+        validateResponse: (data, response) => response.statusCode === 302 &&
+                                              response.headers.hasOwnProperty("set-cookie") &&
+                                              response.headers["set-cookie"][0].indexOf("deleted") >= 0, //has delete cookie action
+        validateResponseData: (data, responseData, response) => responseData.indexOf("wait0.stm") >= 0,
         useResponse: (data, responseData, response) => {
 
         }
@@ -223,7 +196,7 @@ function createLogger(prefix) {
     ["debugBare", "magenta"]
   ].reduce((obj, logType) => {
     //add colorized logger
-    obj[logType[0]] = (str) => {
+    obj[logType[0]] = str => {
       //use color with given name, add prefix and actual string
       console.log(colors[logType[1]](colors.bold(prefix) + str));
     }
@@ -259,7 +232,7 @@ function getObjectPropAmount(obj) {
 function matchHeaders(headers) {
   return routerConfigs
   //match with all configs and calculate similarity to fingerprints
-  .map((config) => {
+  .map(config => {
     //determine match confidence
     let confidence = 0;
 
@@ -275,7 +248,7 @@ function matchHeaders(headers) {
           confidence ++;
         }
       } //confidence point if value exists in headers but with other key name
-      else if (Object.values(headers).some((value) => value === config.fingerprint[checkName])) {
+      else if (Object.values(headers).some(value => value === config.fingerprint[checkName])) {
         confidence ++;
       }
     }
@@ -328,7 +301,7 @@ function attachRequestErrorHandlers(request, logger) {
     timedOut = true;
   })
   //handle errors by printing them
-  .on("error", (e) => {
+  .on("error", e => {
     if (! timedOut) {
       logger.error("Problem with request: " + e.message);
     }
@@ -361,7 +334,7 @@ function getHostConfig(host, callback, logger) {
       hostname: host,
       timeout: probeTimeout
     }),
-    (response) => {
+    response => {
       //use headers in fingerprints to determine device type
       let result = matchHeaders(response.headers);
 
@@ -445,41 +418,40 @@ function printResponseValidMsg(specificResponseValidation) {
   }
 }
 
+//converts array of mixed object and non object action to only string actions
+function toStringActions(array) {
+  return array.map(action => (typeof action === "object") ? action.name : action);
+}
+
+//gets action name from an action name object or string
+function getName(actionName) {
+  return (typeof actionName === "object") ? actionName.name : actionName;
+}
+
 //performs named action with given host and it's config, also gets additional data with actionParams
-function performAction(host, config, actionName, logger, actionParams, nextActions, actionHistory) {
+function performAction(host, config, actionIdentifier, logger, actionParams, nextActions, actionHistory) {
   //call next action if it's given
-  let complete = () => {
+  let complete = dontAddToHistory => {
     if (typeof nextActions !== "undefined" && nextActions.length) {
       //get next action
       const nextAction = nextActions.shift();
 
       //add current action to history
-      actionHistory.push(actionName);
+      if (typeof dontAddToHistory === "undefined" || ! dontAddToHistory) {
+        actionHistory.push((typeof actionName === "object") ? actionName.name : actionName);
+      }
 
       //perform next action and pass remaining actions on
-      performAction(host, config, nextAction, logger, actionParams, nextActions, actionHistory);
-      //setTimeout(performAction.bind(undefined, host, config, nextAction, logger, actionParams, nextActions, actionHistory), 0);
+      let doNextAction = performAction.bind(undefined, host, config, nextAction, logger, actionParams, nextActions, actionHistory);
+
+      //insert delay if set
+      if (actionParams.delay > 0) {
+        setTimeout(doNextAction, actionParams.delay);
+      } else {
+        doNextAction();
+      }
     }
   }
-
-  //true when orderSolved have been taken care of beforehand
-  let orderSolved = false;
-
-  //if action name is an object we set orderSolved and change actionName
-  if (actionName.hasOwnProperty("name")) {
-    orderSolved = true;
-    actionName = actionName.name;
-
-    //different log message, we are doing this action again after having resolved doBefores
-    if (actionName.orderAffected) {
-      logger.info("Resuming to perform action '" + actionName + "'...");
-    }
-  } else {
-    logger.info("Performing action '" + actionName + "'...");
-  }
-
-  //order solve status
-  logger.debug("order solved", orderSolved);
 
   //empty if not given
   if (typeof actionParams === "undefined") {
@@ -488,6 +460,32 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
   if (typeof actionHistory === "undefined") {
     actionHistory = [];
   }
+
+  //true when orderSolved have been taken care of beforehand
+  let orderSolved = false;
+
+  //get name of action
+  const actionName = getName(actionIdentifier);
+
+  //continue with next action directly if this is a consequence that has been resolved
+  if (actionIdentifier.hasOwnProperty("isConsequence") &&
+      actionIdentifier.isConsequence &&
+      actionHistory.lastIndexOf(actionIdentifier.name) > actionIdentifier.afterIndex) {
+    logger.debug("consequense flow", "Skipped action '" + actionName + "' because it already appeared after the action with this action as a consequence.")
+    complete();
+  }
+
+  //if action name is an object we set orderSolved and change actionName
+  orderSolved = actionIdentifier.hasOwnProperty("orderAffected");
+  if (orderSolved) {
+    //different log message, we are doing this action again after having resolved doBefores
+    if (actionIdentifier.orderAffected) {
+      logger.info("Resuming to perform action '" + actionName + "'...");
+    }
+  } else {
+    logger.info("Performing action '" + actionName + "'...");
+  }
+  logger.debug("order solved", orderSolved);
 
   //check if device has any actions
   if (config.hasOwnProperty("actions")) {
@@ -505,7 +503,7 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
         //next actions to be done, includes directly next one
         let actions = [];
 
-        //that the action is an object singifies that ordering has been/will have been taken care of!
+        //that the action is an object signifies that ordering has been/will have been taken care of!
         let currentActionObj = {
           name: actionName,
           orderAffected: beforePresent || afterPresent //set to true if actions we actually added
@@ -514,7 +512,7 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
         //dependencies actions present and need to be adresses (not in history)
         if (depsPresent) {
           //filter out already done ones, that are present in the history
-          const addDeps = currentAction.dependencies.filter((action) => ! actionHistory.includes(action));
+          const addDeps = currentAction.dependencies.filter(action => actionHistory.indexOf(action) === -1);
 
           //there are any
           if (addDeps.length) {
@@ -534,12 +532,8 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
           actions.push(...currentAction.doBefore.slice());
         }
 
-        //index of current action in actions
-        if (conseqPresent) { //only conseqPresent needs this
-          var currentIndex = actions.length;
-        }
-
         //add current one
+        const currentIndex = actions.length;
         actions.push(currentActionObj);
 
         //following actions present
@@ -558,12 +552,22 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
         //add consequences to end of everything
         if (conseqPresent) {
           //for each one, check if it doen't already appear after the current one
-          const conseqActions = currentAction.consequences.filter((action) => actions.lastIndexOf(action) <= currentIndex);
+          let conseqActions = currentAction.consequences.filter(action => toStringActions(actions).lastIndexOf(action) <= currentIndex);
 
           //onyl if any still have to be done
           if (conseqActions.length) {
-            //add to end of action list
             logger.info("Following action" + puralS(conseqActions) + " scheduled sometime after the current one: " + conseqActions.join(", "));
+
+            //map to action name objects
+            conseqActions = conseqActions.map(name => ({
+              name: name,
+              isConsequence: true,
+
+              //keep track of index of the current action in actionHistory so that we can prevent duplicate execution of the consequence actions when they appear as a consequence after they've been already performed for another cause
+              afterIndex: actionHistory.length //current length of history is index where current action will be placed in history
+            }));
+
+            //add to end of action list
             actions.push(...conseqActions);
             currentActionObj.orderAffected = true;
           }
@@ -572,8 +576,8 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
         //copy to nextActions
         nextActions = actions;
 
-        //perform action with first doBefore and added next actions
-        complete();
+        //perform action with first doBefore and added next actions, dont add to history because we only did the ordering this time
+        complete(false);
       } else { //do action now
         //preprocess action to perform
         currentAction = preprocessAction(config, currentAction, actionParams);
@@ -616,7 +620,7 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
           //processed options
           requestOptions,
           //handles reponse to verify success
-          (response) => {
+          response => {
             //flag set to true if response is ok
             let validated;
 
@@ -656,7 +660,7 @@ function performAction(host, config, actionName, logger, actionParams, nextActio
 
                 //add length to counter on received data
                 response
-                .on("data", (chunk) => {
+                .on("data", chunk => {
                   //collect data chunks
                   reponseData.push(chunk);
                 })
@@ -747,7 +751,7 @@ function action(host, actionNames, actionParams) {
   //actionNames is an array
   if (typeof actionNames === "object") {
     //remove empty actions
-    actionNames = actionNames.filter((name) => name.length);
+    actionNames = actionNames.filter(name => name.length);
 
     //still actions left
     if (actionNames.length) {
@@ -769,7 +773,7 @@ function action(host, actionNames, actionParams) {
 
   //get device type and do action then
   if (anyAction) {
-    getHostConfig(host, (config) => {
+    getHostConfig(host, config => {
       //do actions on success determining device type
       performAction(host, config, actionNames, logger, actionParams, nextActions);
     }, logger);
@@ -783,5 +787,8 @@ function action(host, actionNames, actionParams) {
   setPassword: "A3fgnX5688bZ4y" //arbitrary
 });*/
 action("192.168.2.1", ["login"], {
+  //a delay can be set here that is applied between calls of performAction
+  //delay: <milliseconds>,
+
   //setPassword: "blahblah"
 });
