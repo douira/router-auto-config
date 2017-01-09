@@ -21,6 +21,7 @@ const actionTimeout = 15000; //action timeout, loger than probeTimeout, because 
 const requestUserAgent = "router-auto-config by douira"; //what to send as user agent in html headers
 const printVerboseData = false; //enable to print lots of data about what's happening
 const completeWithNoDataValidation = true; //continue evem when the response data isn't validated
+const rootLogger = createLogger("[SCHEDULER]"); //logger for scheduler
 
 //validate ok with reponse code 200
 function okWithCode200(data, response) {
@@ -99,7 +100,6 @@ const routerConfigs = [
       "content-length":"29923"
     },
     data: {
-      password: "snip",
       loginCookie: null, //both not gotten yet
       httoken: null
     },
@@ -125,13 +125,14 @@ const routerConfigs = [
         doAfter: ["getToken"],
         consequences: ["logout"],
         actionData: {
+          password: "",
           path: "/cgi-bin/login.exe"
         },
         getOptions: (data, host) => ({
           path: data.actionData.path
         }),
         getPostData: data => ({
-          pws: data.password
+          pws: data.actionData.password
         }),
         validateResponse: (data, response) => response.statusCode === 302 && response.headers.hasOwnProperty("set-cookie"),
         validateResponseData: (data, responseData, response) => responseData.indexOf("wait0.stm") >= 0,
@@ -231,51 +232,51 @@ function getObjectPropAmount(obj) {
 //uses fingerprints to determine the best device match for the reponse headers
 function matchHeaders(headers) {
   return routerConfigs
-  //match with all configs and calculate similarity to fingerprints
-  .map(config => {
-    //determine match confidence
-    let confidence = 0;
+    //match with all configs and calculate similarity to fingerprints
+    .map(config => {
+      //determine match confidence
+      let confidence = 0;
 
-    //for all fingerprint fieds
-    for (let checkName in config.fingerprint) {
-      //check presence in given headers
-      if (headers.hasOwnProperty(checkName)) {
-        //similarity increases confidence
-        confidence ++;
+      //for all fingerprint fieds
+      for (let checkName in config.fingerprint) {
+        //check presence in given headers
+        if (headers.hasOwnProperty(checkName)) {
+          //similarity increases confidence
+          confidence ++;
 
-        //check match with given headers
-        if (headers[checkName] === config.fingerprint[checkName]) {
+          //check match with given headers
+          if (headers[checkName] === config.fingerprint[checkName]) {
+            confidence ++;
+          }
+        } //confidence point if value exists in headers but with other key name
+        else if (Object.values(headers).some(value => value === config.fingerprint[checkName])) {
           confidence ++;
         }
-      } //confidence point if value exists in headers but with other key name
-      else if (Object.values(headers).some(value => value === config.fingerprint[checkName])) {
+      }
+
+      //check header amount match
+      if (getObjectPropAmount(config.fingerprint) === getObjectPropAmount(headers)) {
         confidence ++;
       }
-    }
 
-    //check header amount match
-    if (getObjectPropAmount(config.fingerprint) === getObjectPropAmount(headers)) {
-      confidence ++;
-    }
+      //return confidence as percentage by dividing through possible max amount of points
+      return confidence / (getObjectPropAmount(config.fingerprint) * 2 + 1);
+    })
+    //find config for highest confidence value
+    .reduce((best, confidence, configIndex) => {
+      //confidence is largest than current best
+      if (best.confidence < confidence) {
+        //change best to new confidence and config
+        best.confidence = confidence;
+        best.config = routerConfigs[configIndex];
+      }
 
-    //return confidence as percentage by dividing through possible max amount of points
-    return confidence / (getObjectPropAmount(config.fingerprint) * 2 + 1);
-  })
-  //find config for highest confidence value
-  .reduce((best, confidence, configIndex) => {
-    //confidence is largest than current best
-    if (best.confidence < confidence) {
-      //change best to new confidence and config
-      best.confidence = confidence;
-      best.config = routerConfigs[configIndex];
-    }
-
-    //return modifed object
-    return best;
-  }, {
-    confidence: 0,
-    config: null
-  });
+      //return modifed object
+      return best;
+    }, {
+      confidence: 0,
+      config: null
+    });
 }
 
 //return decimal number as percent int
@@ -289,23 +290,23 @@ function attachRequestErrorHandlers(request, logger) {
   let timedOut = false;
 
   request
-  //timeout handler
-  .once("timeout", () => {
-    //took too long for device to respond
-    logger.error("Request timeout after " + request.timeout + "ms: Device took too long to respond.");
+    //timeout handler
+    .once("timeout", () => {
+      //took too long for device to respond
+      logger.error("Request timeout after " + request.timeout + "ms: Device took too long to respond.");
 
-    //actually stop the request
-    request.abort();
+      //actually stop the request
+      request.abort();
 
-    //set flag to prevent another error message
-    timedOut = true;
-  })
-  //handle errors by printing them
-  .on("error", e => {
-    if (! timedOut) {
-      logger.error("Problem with request: " + e.message);
-    }
-  });
+      //set flag to prevent another error message
+      timedOut = true;
+    })
+    //handle errors by printing them
+    .on("error", e => {
+      if (! timedOut) {
+        logger.error("Problem with request: " + e.message);
+      }
+    });
 }
 
 //adds the user agent to request options header property
@@ -326,9 +327,9 @@ function addUserAgentInfo(options) {
 function getHostConfig(host, callback, logger) {
   //send request to get reponse headers
   logger.info("Determining device type...");
-  const request = http
+
   //send GET to host
-  .request(
+  const request = http.request(
     //host and timeout, add user agent too
     addUserAgentInfo({
       hostname: host,
@@ -405,7 +406,7 @@ function checkArrayPropertyLength(object, propName) {
 }
 
 //returns a plural s if given array is loger than one
-function puralS(array) {
+function pluralS(array) {
   return array.length > 1 ? "s" : "";
 }
 
@@ -429,20 +430,23 @@ function getName(actionName) {
 }
 
 //performs named action with given host and it's config, also gets additional data with actionParams
-function performAction(host, config, actionIdentifier, logger, actionParams, nextActions, actionHistory) {
+function performAction(host, config, actionIdentifier, logger, actionParams, finishCallback, nextActions, actionHistory) {
   //call next action if it's given
-  let complete = dontAddToHistory => {
+  let complete = addToHistory => {
+    //add current action to history
+    logger.debug("add to history", addToHistory);
+    logger.debug("name add", actionName);
+    if (addToHistory) {
+      actionHistory.push(actionName);
+    }
+
+    //still actions to go
     if (typeof nextActions !== "undefined" && nextActions.length) {
       //get next action
       const nextAction = nextActions.shift();
 
-      //add current action to history
-      if (typeof dontAddToHistory === "undefined" || ! dontAddToHistory) {
-        actionHistory.push((typeof actionName === "object") ? actionName.name : actionName);
-      }
-
       //perform next action and pass remaining actions on
-      let doNextAction = performAction.bind(undefined, host, config, nextAction, logger, actionParams, nextActions, actionHistory);
+      let doNextAction = performAction.bind(null, host, config, nextAction, logger, actionParams, finishCallback, nextActions, actionHistory);
 
       //insert delay if set
       if (actionParams.delay > 0) {
@@ -450,6 +454,9 @@ function performAction(host, config, actionIdentifier, logger, actionParams, nex
       } else {
         doNextAction();
       }
+    } else {
+      //end of actions, call finishCallback to finish
+      finishCallback(host, actionHistory, logger);
     }
   }
 
@@ -472,7 +479,7 @@ function performAction(host, config, actionIdentifier, logger, actionParams, nex
       actionIdentifier.isConsequence &&
       actionHistory.lastIndexOf(actionIdentifier.name) > actionIdentifier.afterIndex) {
     logger.debug("consequense flow", "Skipped action '" + actionName + "' because it already appeared after the action with this action as a consequence.")
-    complete();
+    complete(false);
   }
 
   //if action name is an object we set orderSolved and change actionName
@@ -516,7 +523,7 @@ function performAction(host, config, actionIdentifier, logger, actionParams, nex
 
           //there are any
           if (addDeps.length) {
-            logger.info("Dependency action" + puralS(addDeps) + " scheduled before the current one: " + addDeps.join(", "));
+            logger.info("Dependency action" + pluralS(addDeps) + " scheduled before the current one: " + addDeps.join(", "));
 
             //add to next actions first, before doBefore
             actions.push(...addDeps);
@@ -526,7 +533,7 @@ function performAction(host, config, actionIdentifier, logger, actionParams, nex
 
         //doBefore actions present
         if (beforePresent) {
-          logger.info("Preceding action" + puralS(currentAction.doBefore) + " scheduled right before the current one: " + currentAction.doBefore.join(", "));
+          logger.info("Preceding action" + pluralS(currentAction.doBefore) + " scheduled right before the current one: " + currentAction.doBefore.join(", "));
 
           //add doBefore actions
           actions.push(...currentAction.doBefore.slice());
@@ -538,7 +545,7 @@ function performAction(host, config, actionIdentifier, logger, actionParams, nex
 
         //following actions present
         if (afterPresent) {
-          logger.info("Following action" + puralS(currentAction.doAfter) + " scheduled directly after the current one: " + currentAction.doAfter.join(", "));
+          logger.info("Following action" + pluralS(currentAction.doAfter) + " scheduled directly after the current one: " + currentAction.doAfter.join(", "));
 
           //add following actions
           actions.push(...currentAction.doAfter.slice());
@@ -556,7 +563,7 @@ function performAction(host, config, actionIdentifier, logger, actionParams, nex
 
           //onyl if any still have to be done
           if (conseqActions.length) {
-            logger.info("Following action" + puralS(conseqActions) + " scheduled sometime after the current one: " + conseqActions.join(", "));
+            logger.info("Following action" + pluralS(conseqActions) + " scheduled sometime after the current one: " + conseqActions.join(", "));
 
             //map to action name objects
             conseqActions = conseqActions.map(name => ({
@@ -660,43 +667,43 @@ function performAction(host, config, actionIdentifier, logger, actionParams, nex
 
                 //add length to counter on received data
                 response
-                .on("data", chunk => {
-                  //collect data chunks
-                  reponseData.push(chunk);
-                })
-                //validate data on completion of data sending
-                .on("end", () => {
-                  //reponse data string
-                  const reponseString = reponseData.join();
+                  .on("data", chunk => {
+                    //collect data chunks
+                    reponseData.push(chunk);
+                  })
+                  //validate data on completion of data sending
+                  .on("end", () => {
+                    //reponse data string
+                    const reponseString = reponseData.join();
 
-                  logger.debug("response data", reponseString.split("\n").slice(0, 35).join("\n"));
+                    logger.debug("response data", reponseString.split("\n").slice(0, 35).join("\n"));
 
-                  //use reponse data (for next action for example)
-                  if (usesResponseData) {
-                    currentAction.useResponse(reponseString, response);
-                  }
-
-                  //validate response data
-                  if (specificDataValidation) {
-                    if (currentAction.validateResponseData(reponseString, response)) {
-                      if (specificResponseValidation) {
-                        logger.success("Response headers and data passed action specific validation.");
-                      } else {
-                        printResponseValidMsg(false);
-                        logger.success("Response data passed action specific validation.");
-                      }
-
-                      //completion callback
-                      complete();
-                    } else {
-                      printResponseValidMsg(specificResponseValidation);
-                      logger.error("Response data didn't pass action specific validation.");
+                    //use reponse data (for next action for example)
+                    if (usesResponseData) {
+                      currentAction.useResponse(reponseString, response);
                     }
-                  } else if (completeWithNoDataValidation) {
-                    //complete if we're allowed and only here for logging
-                    complete();
-                  }
-                });
+
+                    //validate response data
+                    if (specificDataValidation) {
+                      if (currentAction.validateResponseData(reponseString, response)) {
+                        if (specificResponseValidation) {
+                          logger.success("Response headers and data passed action specific validation.");
+                        } else {
+                          printResponseValidMsg(false);
+                          logger.success("Response data passed action specific validation.");
+                        }
+
+                        //completion callback
+                        complete(true);
+                      } else {
+                        printResponseValidMsg(specificResponseValidation);
+                        logger.error("Response data didn't pass action specific validation.");
+                      }
+                    } else if (completeWithNoDataValidation) {
+                      //complete if we're allowed and only here for logging
+                      complete(true);
+                    }
+                  });
               }
 
               //action does not have function for specific data validation
@@ -706,7 +713,7 @@ function performAction(host, config, actionIdentifier, logger, actionParams, nex
 
                 //complete if allowed
                 if (completeWithNoDataValidation && ! usesResponseData) {
-                  complete();
+                  complete(true);
                 }
               }
             }
@@ -730,21 +737,30 @@ function performAction(host, config, actionIdentifier, logger, actionParams, nex
       logger.warn("This device type doesn't have a valid action '" + actionName + "'.");
 
       //completion callback
-      complete();
+      complete(true);
     }
   } else {
     logger.error("This device type cannot perform any actions.");
   }
 }
 
+//gets formatted time from hrtime tuple array
+function formatElapsedTime(arr, digits) {
+  return (arr[0] + arr[1] / 1e9).toFixed(digits) + "s";
+}
+
+//called when there are no more actions for a device, end of action list
+function deviceActionsDone(startTime, host, actionHistory, logger) {
+  logger.info("Performed " + actionHistory.length + " action" + pluralS(actionHistory) + ": " + actionHistory.join(", "));
+
+  //print timer
+  const timeElapsed = process.hrtime(startTime);
+  logger.info("Time elapsed for this device: " + formatElapsedTime(timeElapsed, 3));
+  logger.debug("memory usage", process.memoryUsage());
+}
+
 //combines determining device type and performing the action itself
-function action(host, actionNames, actionParams) {
-  //create logger for host
-  logger = createLogger("[" + host + "]");
-
-  //array of actions to be passed as next actions
-  const nextActions = [];
-
+function action(hosts, actionNames, rootLogger, actionParams) {
   //true if there are any actions given
   let anyAction = actionNames.length > 0;
 
@@ -757,26 +773,52 @@ function action(host, actionNames, actionParams) {
     if (actionNames.length) {
       //list is longer than a single element
       if (actionNames.length > 1) {
-        logger.info("Performing list of actions: " + actionNames.join(", "));
-
-        //set next actions to list of actions without the first one
-        nextActions.push(...actionNames.slice(1));
+        rootLogger.info("Performing list of actions: " + actionNames.join(", "));
       }
-
-      //current action is the first one
-      actionNames = actionNames[0];
     } else {
       //no actions after all
       anyAction = false;
     }
   }
 
-  //get device type and do action then
+  //empty actionParams if none given
+  if (typeof actionParams === "undefined") {
+    actionParams = {};
+  }
+
+  //there are actions
   if (anyAction) {
-    getHostConfig(host, config => {
-      //do actions on success determining device type
-      performAction(host, config, actionNames, logger, actionParams, nextActions);
-    }, logger);
+    //if host is an array
+    const isArray = typeof hosts === "object";
+
+    //for several hosts
+    if (isArray && hosts.length > 1) {
+      //filter hosts
+      hosts = hosts
+        .map(str => str.trim()) //remove whitespace
+        .filter(str => str.length) //remove ones that are now empty
+        .filter((host, index, array) => array.indexOf(host) !== index); //remove duplicates
+
+      //call action for all hosts
+      rootLogger.info("Processing list of hosts: " + hosts.join(", "));
+      hosts.forEach(host => action(host, actionNames, actionParams));
+    } else { //single host
+      //convert to single value if array with one value given
+      if (isArray) {
+        hosts = hosts[0];
+      }
+
+      //get tiem from start of interfaceing with this device
+      const startTime = process.hrtime();
+
+      //create logger for host
+      const logger = createLogger("[" + hosts + "]");
+
+      getHostConfig(hosts, config => {
+        //do actions on success determining device type
+        performAction(hosts, config, actionNames[0], logger, actionParams, deviceActionsDone.bind(null, startTime), actionNames.slice(1));
+      }, logger);
+    }
   } else {
     logger.warn("No action(s) specified.");
   }
@@ -786,7 +828,7 @@ function action(host, actionNames, actionParams) {
 /*action("192.168.2.160", "setWifiPassword", {
   setPassword: "A3fgnX5688bZ4y" //arbitrary
 });*/
-action("192.168.2.1", ["login"], {
+action(["192.168.2.1", "192.168.2.1"], ["login"], rootLogger, {
   //a delay can be set here that is applied between calls of performAction
   //delay: <milliseconds>,
 
