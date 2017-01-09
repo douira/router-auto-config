@@ -21,7 +21,7 @@ const actionTimeout = 15000; //action timeout, loger than probeTimeout, because 
 const requestUserAgent = "router-auto-config by douira"; //what to send as user agent in html headers
 const printVerboseData = false; //enable to print lots of data about what's happening
 const completeWithNoDataValidation = true; //continue evem when the response data isn't validated
-const rootLogger = createLogger("[SCHEDULER]"); //logger for scheduler
+const rootLogger = createLogger("SCHEDULER"); //logger for scheduler
 
 //validate ok with reponse code 200
 function okWithCode200(data, response) {
@@ -125,7 +125,7 @@ const routerConfigs = [
         doAfter: ["getToken"],
         consequences: ["logout"],
         actionData: {
-          password: "",
+          password: "snip",
           path: "/cgi-bin/login.exe"
         },
         getOptions: (data, host) => ({
@@ -188,6 +188,10 @@ const routerConfigs = [
 
 //returns object with logger functions
 function createLogger(prefix) {
+  //wrap the prefix in sqare brackets
+  prefix = "[" + prefix + "]";
+
+  //logging names and colors
   const loggers = [
     //name of logger function with color name
     ["info", "cyan"],
@@ -406,8 +410,8 @@ function checkArrayPropertyLength(object, propName) {
 }
 
 //returns a plural s if given array is loger than one
-function pluralS(array) {
-  return array.length > 1 ? "s" : "";
+function pluralS(value) {
+  return ((typeof value === "object") ? value.length : value) > 1 ? "s" : "";
 }
 
 //print that the response headers were validated, message dependent on validatiob method type
@@ -433,7 +437,7 @@ function getName(actionName) {
 function performAction(host, config, actionIdentifier, logger, actionParams, finishCallback, nextActions, actionHistory) {
   //call next action if it's given
   let complete = addToHistory => {
-    //add current action to history
+    //add current action to history if enabled
     logger.debug("add to history", addToHistory);
     logger.debug("name add", actionName);
     if (addToHistory) {
@@ -455,9 +459,15 @@ function performAction(host, config, actionIdentifier, logger, actionParams, fin
         doNextAction();
       }
     } else {
-      //end of actions, call finishCallback to finish
-      finishCallback(host, actionHistory, logger);
+      //end of actions, call finishCallback to finish, with successful flag set to true
+      finishCallback(host, actionHistory, logger, true);
     }
+  }
+
+  //call with host history and logger to finishCallback, successful is false
+  let failed = () => {
+    logger.error("Action '" + actionName + "' failed.");
+    finishCallback(host, actionHistory, logger, false);
   }
 
   //empty if not given
@@ -638,6 +648,7 @@ function performAction(host, config, actionIdentifier, logger, actionParams, fin
               validated = currentAction.validateResponse(response);
               if (! validated) {
                 logger.error("Response didn't pass action specific validation.");
+                failed();
               }
             } else {
               const statusCode = response.statusCode;
@@ -646,6 +657,7 @@ function performAction(host, config, actionIdentifier, logger, actionParams, fin
               validated = statusCode === 200;
               if (! validated) {
                 logger.error("Response error with status code " + statusCode + " returned.");
+                failed();
               }
             }
             //successful header validation messages are printed later to try to merge them with the data validation messages
@@ -698,6 +710,7 @@ function performAction(host, config, actionIdentifier, logger, actionParams, fin
                       } else {
                         printResponseValidMsg(specificResponseValidation);
                         logger.error("Response data didn't pass action specific validation.");
+                        failed();
                       }
                     } else if (completeWithNoDataValidation) {
                       //complete if we're allowed and only here for logging
@@ -713,7 +726,12 @@ function performAction(host, config, actionIdentifier, logger, actionParams, fin
 
                 //complete if allowed
                 if (completeWithNoDataValidation && ! usesResponseData) {
-                  complete(true);
+                  if (completeWithNoDataValidation) {
+                    complete(true);
+                  } else {
+                    //failed if cant complete with no validation
+                    failed();
+                  }
                 }
               }
             }
@@ -741,6 +759,7 @@ function performAction(host, config, actionIdentifier, logger, actionParams, fin
     }
   } else {
     logger.error("This device type cannot perform any actions.");
+    failed();
   }
 }
 
@@ -750,24 +769,67 @@ function formatElapsedTime(arr, digits) {
 }
 
 //called when there are no more actions for a device, end of action list
-function deviceActionsDone(startTime, host, actionHistory, logger) {
-  logger.info("Performed " + actionHistory.length + " action" + pluralS(actionHistory) + ": " + actionHistory.join(", "));
+function deviceActionsDone(startTime, doneHostsAccumulator, host, actionHistory, logger, success) {
+  //print done for this device
+  logger[success ? "success" : "warn"]("Performed " + actionHistory.length + " action" + pluralS(actionHistory) + ": " + actionHistory.join(", "));
+  if (! success) {
+    logger.error("Didn't complete all actions.")
+  }
 
   //print timer
   const timeElapsed = process.hrtime(startTime);
   logger.info("Time elapsed for this device: " + formatElapsedTime(timeElapsed, 3));
-  logger.debug("memory usage", process.memoryUsage());
+
+  //increment accumulator
+  if (doneHostsAccumulator.use) {
+    doneHostsAccumulator.addFinish(success);
+  }
+}
+
+//returns an accumulator object that has two properties ok and error and a method to check completion
+function createAccumulator(totalHosts, rootLogger, everythingDone) {
+  return {
+    ok: 0, //hosts that completed all actions successfully
+    error: 0, //hosts that encountered an error,
+    use: true, //enabled use of this accumulator
+    total: totalHosts, //sum of hosts to wait for
+    //checks if all hosts have finished
+    checkComplete: function() {
+      //if total is 0 we will be silent
+      if (this.total > 0) {
+        const sum = this.ok + this.error;
+
+        //reached total number of hosts to finish
+        if (sum === this.total) {
+          //call done callback
+          everythingDone(this.ok, this.error, this.total, rootLogger);
+        } else if (sum > this.total) {
+          rootLogger.warn("More hosts reported finishing than were started. (" + sum + " > " + this.total + ")");
+        }
+      }
+    },
+    //called when a host finishes
+    addFinish: function(success) {
+      //increment corresponding counter
+      this[success ? "ok" : "error"] ++;
+
+      //check if done
+      this.checkComplete();
+    }
+  }
 }
 
 //combines determining device type and performing the action itself
-function action(hosts, actionNames, rootLogger, actionParams) {
+function action(hosts, actionNames, rootLogger, actionParams, doneHostsAccumulator) {
   //true if there are any actions given
   let anyAction = actionNames.length > 0;
 
   //actionNames is an array
   if (typeof actionNames === "object") {
     //remove empty actions
-    actionNames = actionNames.filter(name => name.length);
+    actionNames = actionNames
+      .map(name => name.trim())
+      .filter(name => name.length);
 
     //still actions left
     if (actionNames.length) {
@@ -788,36 +850,59 @@ function action(hosts, actionNames, rootLogger, actionParams) {
 
   //there are actions
   if (anyAction) {
-    //if host is an array
-    const isArray = typeof hosts === "object";
+    //put into array if single
+    if (typeof hosts !== "object") {
+      hosts = [hosts];
+    }
 
-    //for several hosts
-    if (isArray && hosts.length > 1) {
-      //filter hosts
-      hosts = hosts
-        .map(str => str.trim()) //remove whitespace
-        .filter(str => str.length) //remove ones that are now empty
-        .filter((host, index, array) => array.indexOf(host) !== index); //remove duplicates
+    //empty fake accumulator if none given
+    if (typeof doneHostsAccumulator === "undefined") {
+      doneHostsAccumulator = { use: false };
+    }
+
+    //filter hosts
+    hosts = hosts
+      .map(str => str.trim()) //remove whitespace
+      .filter(str => str.length) //remove ones that are now empty
+      .filter((host, index, array) => array.indexOf(host) !== index); //remove duplicates
+
+    //only if there are still more than 1 actions
+    if (hosts.length > 1) {
+      rootLogger.info("Processing list of hosts: " + hosts.join(", "));
+
+      //create done accumulator
+      const accumulator = createAccumulator(hosts.length, rootLogger, (ok, error, total, logger) => {
+        //done message
+        logger[error === 0 ? "success" : "warn"]("OK: " + ok + " host" + pluralS(ok) + ", with error(s): " + error + " host" + pluralS(error) + ", total: " + total + " host" + pluralS(total));
+
+        logger.debug("memory usage", process.memoryUsage());
+      });
 
       //call action for all hosts
-      rootLogger.info("Processing list of hosts: " + hosts.join(", "));
-      hosts.forEach(host => action(host, actionNames, actionParams));
-    } else { //single host
-      //convert to single value if array with one value given
-      if (isArray) {
-        hosts = hosts[0];
-      }
+      hosts.forEach(host => action(host, actionNames, rootLogger, actionParams, accumulator));
+    } else if (hosts.length) { //single
+      //convert to single value
+      const host = hosts[0];
 
       //get tiem from start of interfaceing with this device
       const startTime = process.hrtime();
 
       //create logger for host
-      const logger = createLogger("[" + hosts + "]");
+      const logger = createLogger(host);
 
-      getHostConfig(hosts, config => {
-        //do actions on success determining device type
-        performAction(hosts, config, actionNames[0], logger, actionParams, deviceActionsDone.bind(null, startTime), actionNames.slice(1));
+      //get device type and then do actions
+      getHostConfig(host, config => {
+        //do actions on success determining device type, empty accumulator with use as false to be quiet
+        performAction(host,
+                      config,
+                      actionNames[0],
+                      logger,
+                      actionParams,
+                      deviceActionsDone.bind(null, startTime, doneHostsAccumulator),
+                      actionNames.slice(1));
       }, logger);
+    } else {
+      rootLogger.warn("No valid host(s) given.");
     }
   } else {
     logger.warn("No action(s) specified.");
@@ -828,7 +913,7 @@ function action(hosts, actionNames, rootLogger, actionParams) {
 /*action("192.168.2.160", "setWifiPassword", {
   setPassword: "A3fgnX5688bZ4y" //arbitrary
 });*/
-action(["192.168.2.1", "192.168.2.1"], ["login"], rootLogger, {
+action("192.168.2.1", ["login"], rootLogger, {
   //a delay can be set here that is applied between calls of performAction
   //delay: <milliseconds>,
 
