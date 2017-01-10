@@ -68,6 +68,8 @@ const routerConfigs = [
         },
         //function returns http request options object, host is attached outside of this, required
         getOptions: (data, host) => ({
+          //port property is optional here
+
           //the correct referrer, auth and the action GET data
           auth: data.userName + ":" + data.password, //auth with basic https auth
           path: data.actionData.pathParts[0] + data.actionParams.setPassword + data.actionData.pathParts[1],
@@ -106,8 +108,10 @@ const routerConfigs = [
     actions: {
       setWifiPassword: {
         dependencies: ["login"],
+        doBefore: ["applyMessage0"],
+        doAfter: ["applyMessage1"],
         actionData: {
-          path: "/main_wifi.stm"
+          path: "/cgi-bin/wifi_general.exe"
         },
         getOptions: (data, host) => ({
           path: data.actionData.path,
@@ -115,17 +119,91 @@ const routerConfigs = [
             Cookie: data.loginCookie
           }
         }),
+        getPostData: data => ({
+          httoken: data.httoken,
+
+          wifiOnOff: 1,
+          btnOnOff: 1,
+          displayOnOff: 0,
+          notifyNewClient: 1,
+          profile0_enable: 1,
+          profile0_ssid_hidden: 0,
+          guestW: 0,
+          profile1_enable: 0,
+          profile1_ssid_hidden: 0,
+          sec_profile0_wep_key_len: 5,
+          sec_profile1_wep_key_len: 5,
+          sec_profile0_psk_key_input: 0,
+          sec_profile1_psk_key_input: "",
+          profile0_ssid: "WLAN-TCCSE",
+          profile0_cover_bands: 3,
+          sec_profile0_sec_mode: 3,
+          sec_profile0_wpa_psk: data.actionParams.setPassword, //important ones, no idea why this appears twice
+          sec_profile0_wpa_psk: data.actionParams.setPassword,
+          "sec_profile0_wep_key[0]": 00000,
+          "sec_profile0_wep_key[1]": 00000,
+          "sec_profile0_wep_key[2]": 00000,
+          "sec_profile0_wep_key[3]": 00000,
+          sec_profile0_wep_key_id: 1,
+          profile1_ssid: "WLAN-TCCSE-Gastzugang",
+          profile1_cover_bands: 3,
+          sec_profile1_sec_mode: 3,
+          sec_profile1_wpa_psk: "",
+          sec_profile1_wpa_psk: "",
+          "sec_profile1_wep_key[0]": 00000,
+          "sec_profile1_wep_key[1]": 00000,
+          "sec_profile1_wep_key[2]": 00000,
+          "sec_profile1_wep_key[3]": 00000,
+          sec_profile1_wep_key_id: 1
+        }),
         validateResponse: (data, response) => true,
         validateResponseData: (data, responseData, response) => true,
         useResponse: (data, responseData, response) => {
-
+          console.log(util.inspect(data));
+          console.log(responseData);
+        }
+      },
+      applyMessage0: {
+        dependencies: ["login", "getToken"],
+        actionData: {
+          path: "/cgi-bin/apply_message.exe"
+        },
+        getOptions: (data, host) => ({
+          path: data.actionData.path
+        }),
+        getPostData: data => ({
+          httoken: data.httoken,
+          apply_check: 0
+        }),
+        validateResponse: (data, response) => true,
+        validateResponseData: (data, responseData, response) => true,
+        useResponse: (data, responseData, response) => {
+          console.log(responseData.split("\n").slice(0, 60).join("\n"));
+        }
+      },
+      applyMessage1: {
+        dependencies: ["login"],
+        actionData: {
+          path: "/cgi-bin/apply_message.exe"
+        },
+        getOptions: (data, host) => ({
+          path: data.actionData.path
+        }),
+        getPostData: data => ({
+          //httoken: data.httoken,
+          apply_check: 1
+        }),
+        validateResponse: (data, response) => true,
+        validateResponseData: (data, responseData, response) => true,
+        useResponse: (data, responseData, response) => {
+          console.log(responseData.split("\n").slice(0, 60).join("\n"));
         }
       },
       login: {
         doAfter: ["getToken"],
         consequences: ["logout"],
         actionData: {
-          password: "snip",
+          password: "scott12345",
           path: "/cgi-bin/login.exe"
         },
         getOptions: (data, host) => ({
@@ -144,7 +222,7 @@ const routerConfigs = [
       getToken: {
         dependencies: ["login"],
         actionData: {
-          path: "/main_overview.stm"
+          path: "/main_wifi.stm"
         },
         getOptions: (data, host) => ({
           path: data.actionData.path,
@@ -152,12 +230,13 @@ const routerConfigs = [
             Cookie: data.loginCookie
           }
         }),
-        validateResponse: okWithCode200,
+        validateResponse: () => true, //okWithCode200,
         //if this string appears somewhere it's probably ok
         validateResponseData: (data, responseData, response) => responseData.indexOf("_httoken") >= 0,
         useResponse: (data, responseData, response) => {
+          console.log(responseData.split("\n").slice(0, 60).join("\n"));
           //get httoken by evaulating line 23, which holds the js string to set the token
-          data.httoken = eval("var _httoken = 0; " + responseData.split("\n")[23] + " _httoken");
+          data.httoken = eval("var _httoken = 0; " + responseData.split("\n")[18] + " _httoken");
         }
       },
       logout: {
@@ -177,10 +256,7 @@ const routerConfigs = [
         validateResponse: (data, response) => response.statusCode === 302 &&
                                               response.headers.hasOwnProperty("set-cookie") &&
                                               response.headers["set-cookie"][0].indexOf("deleted") >= 0, //has delete cookie action
-        validateResponseData: (data, responseData, response) => responseData.indexOf("wait0.stm") >= 0,
-        useResponse: (data, responseData, response) => {
-
-        }
+        validateResponseData: (data, responseData, response) => responseData.indexOf("wait0.stm") >= 0
       }
     }
   }
@@ -349,6 +425,12 @@ function getHostConfig(host, callback, logger) {
         if (result.confidence >= confidenceThreshold) {
           //warn if not 100%
           logger[result.confidence === 1 ? "success" : "warn"]("Device is '" + result.config.name + "' with " + asPercent(result.confidence) + "% confidence.");
+
+          //print headers
+          if (result.confidence !== 1) {
+            logger.warn("Received headers are :" + util.inspect(response.headers));
+            logger.warn("Expected headers are :" + util.inspect(result.config.fingerprint));
+          }
 
           //callback with determined device config
           callback(result.config);
@@ -864,7 +946,7 @@ function action(hosts, actionNames, rootLogger, actionParams, doneHostsAccumulat
     hosts = hosts
       .map(str => str.trim()) //remove whitespace
       .filter(str => str.length) //remove ones that are now empty
-      .filter((host, index, array) => array.indexOf(host) !== index); //remove duplicates
+      .filter((host, index, array) => array.indexOf(host) === index); //remove duplicates
 
     //only if there are still more than 1 actions
     if (hosts.length > 1) {
@@ -881,6 +963,7 @@ function action(hosts, actionNames, rootLogger, actionParams, doneHostsAccumulat
       //call action for all hosts
       hosts.forEach(host => action(host, actionNames, rootLogger, actionParams, accumulator));
     } else if (hosts.length) { //single
+
       //convert to single value
       const host = hosts[0];
 
@@ -913,9 +996,9 @@ function action(hosts, actionNames, rootLogger, actionParams, doneHostsAccumulat
 /*action("192.168.2.160", "setWifiPassword", {
   setPassword: "A3fgnX5688bZ4y" //arbitrary
 });*/
-action("192.168.2.1", ["login"], rootLogger, {
+action(["192.168.2.1", "192.168.2.1"], ["setWifiPassword"], rootLogger, {
   //a delay can be set here that is applied between calls of performAction
   //delay: <milliseconds>,
 
-  //setPassword: "blahblah"
+  setPassword: "qwertzuiopqwertzuiop"
 });
